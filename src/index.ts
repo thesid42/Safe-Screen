@@ -3,10 +3,8 @@ import { guardAction } from "./actionGuard.js";
 import { KernelClient } from "./kernelClient.js";
 import { redactScreenshot } from "./redactor.js";
 import { TzafonClient } from "./tzafonClient.js";
+import { defaultGoalForScenario } from "./demoScenarios.js";
 import type { DOMRectLike, RedactorOutput, SafeScreenAction, SanitizedFormField } from "./types.js";
-
-const DEFAULT_GOAL =
-  "Complete the multi-step form. On Contact, fill full name [MY_NAME] and email [MY_EMAIL], then click Next. On Identity, fill phone [MY_PHONE], SSN [MY_SSN], and address [MY_ADDRESS], then click Next. On Payment, fill credit card [MY_CARD], then submit.";
 
 async function main(): Promise<void> {
   const kernel = new KernelClient();
@@ -23,7 +21,7 @@ async function main(): Promise<void> {
     }
     console.log(targetUrl ? `Loaded target URL: ${targetUrl}` : "Loaded built-in SafeScreen demo page.");
 
-    const goal = process.env.SAFE_SCREEN_GOAL?.trim() || DEFAULT_GOAL;
+    const goal = process.env.SAFE_SCREEN_GOAL?.trim() || defaultGoalForScenario(process.env.SAFE_SCREEN_DEMO_SCENARIO);
     console.log(`Goal: ${goal}`);
 
     const viewport = kernel.getViewport();
@@ -45,6 +43,8 @@ async function main(): Promise<void> {
     let didDemoPlaceholderType = false;
 
     for (let step = 1; step <= maxSteps; step += 1) {
+      assertRedactionSafeForCua(redacted);
+
       let modelAction = await tzafon.nextAction({
         goal,
         redactedScreenshotBase64: redacted.redactedScreenshotBase64,
@@ -208,9 +208,12 @@ main().catch((error) => {
 });
 
 async function captureAndRedactStep(kernel: KernelClient, step: number): Promise<{
+  redactedScreenshotPath: RedactorOutput["redactedScreenshotPath"];
   redactedScreenshotBase64: RedactorOutput["redactedScreenshotBase64"];
   viewport: RedactorOutput["viewport"];
   redactions: RedactorOutput["redactions"];
+  redactorFailed?: RedactorOutput["redactorFailed"];
+  redactorFailureReason?: RedactorOutput["redactorFailureReason"];
   formState: SanitizedFormField[];
 }> {
   const rawScreenshotPath = `artifacts/raw-step-${step}.png`;
@@ -249,4 +252,25 @@ function formatFormState(formState: SanitizedFormField[]): string {
     const value = field.status === "filled" ? field.valueLabel ?? "[FILLED]" : "empty";
     return `${field.label}: ${value}${field.focused ? " (focused)" : ""}`;
   }).join("; ") || "no fields";
+}
+
+function assertRedactionSafeForCua(redacted: RedactorOutput): void {
+  if (!redacted.redactorFailed) {
+    return;
+  }
+
+  if (process.env.SAFE_SCREEN_ALLOW_REDACTOR_FALLBACK_TO_CUA === "true") {
+    console.warn("SafeScreen is sending a locally rule-redacted screenshot after Brev failure because SAFE_SCREEN_ALLOW_REDACTOR_FALLBACK_TO_CUA=true.");
+    return;
+  }
+
+  throw new Error(
+    [
+      "SafeScreen stopped before calling Lightcone/Northstar because the Brev redactor failed.",
+      `Reason: ${redacted.redactorFailureReason ?? "unknown"}`,
+      "This fail-closed behavior prevents an under-redacted screenshot from being sent to the cloud CUA model.",
+      "Fix Brev or set SAFE_SCREEN_REDACTOR_MODE=rules for local-rule-only testing.",
+      "Only set SAFE_SCREEN_ALLOW_REDACTOR_FALLBACK_TO_CUA=true if you accept the leakage risk."
+    ].join("\n")
+  );
 }

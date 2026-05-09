@@ -76,6 +76,14 @@ If `KERNEL_API_KEY` is missing, SafeScreen uses a local Playwright Chromium brow
 
 If `BREV_REDACTOR_URL` is set, SafeScreen calls that service for smart redaction. If it is missing or unavailable and `SAFE_SCREEN_REDACTOR_FALLBACK=true`, SafeScreen falls back to local rule-based redaction.
 
+Placeholder values can be provided in `.env`, for example `SAFE_SCREEN_MY_EMAIL=you@example.com`. If a placeholder value is missing and the model asks SafeScreen to type it, SafeScreen can prompt in the terminal:
+
+```bash
+SAFE_SCREEN_PROMPT_FOR_VALUES=true
+```
+
+For unattended runs, set `SAFE_SCREEN_PROMPT_FOR_VALUES=false`; missing placeholder values will stop the run instead of silently using a demo default.
+
 For a raw vLLM/OpenAI-compatible Qwen VL server, use:
 
 ```bash
@@ -140,10 +148,36 @@ If the service returns `domId`, `dom_id`, `id`, `name`, or exact `text`, SafeScr
 npm run demo
 ```
 
+Or use the local dashboard:
+
+```bash
+npm run web
+```
+
+Open `http://localhost:8787` to start scenarios, watch logs, view the latest raw/redacted screenshots, open the Kernel live feed, send terminal input for vault prompts, and approve submit clicks.
+
 The demo writes:
 
 - `artifacts/raw-step-1.png`
 - `artifacts/redacted-step-1.png`
+
+Choose a built-in scenario:
+
+```bash
+SAFE_SCREEN_DEMO_SCENARIO=multistep
+SAFE_SCREEN_DEMO_SCENARIO=statement
+SAFE_SCREEN_DEMO_SCENARIO=profile
+```
+
+`multistep` is the interactive form-filling demo. `statement` is a read-only account statement with account numbers, routing number, SSN, card, address, and transaction references. `profile` is a customer profile page with credentials, support notes, SSN, phone, and card values.
+
+Each scenario has a default CUA prompt. Override it with:
+
+```bash
+SAFE_SCREEN_GOAL=Your custom prompt with placeholders like [MY_EMAIL].
+```
+
+In the web dashboard, changing the scenario fills the Goal box with that scenario's prompt; edit the box before pressing Start to test prompt variations.
 
 By default, the built-in demo form starts empty so the CUA flow can fill it. Set this to show the original prefilled redaction-proof page:
 

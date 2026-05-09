@@ -52,6 +52,8 @@ export type RedactorOutput = {
   redactedScreenshotBase64: string;
   viewport: Viewport;
   redactions: Redaction[];
+  redactorFailed?: boolean;
+  redactorFailureReason?: string;
 };
 
 export type ActionContext = {

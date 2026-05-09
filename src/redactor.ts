@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { PLACEHOLDER_VAULT, type Placeholder } from "./demoPage.js";
 import type { DOMRectLike, Redaction, RedactorOutput, Viewport, VisibleDomText } from "./types.js";
+import { getKnownVaultValue, getVaultSnapshot, PLACEHOLDERS, type Placeholder } from "./vault.js";
 
-const PLACEHOLDERS = Object.keys(PLACEHOLDER_VAULT) as Placeholder[];
 const DEFAULT_REDACTION_POLICY =
   "Redact only visible sensitive values, not labels or empty fields. Redact direct PII, credentials, financial data, health data, government IDs, and private notes when the sensitive value is visible.";
 
@@ -18,8 +17,8 @@ export async function redactScreenshot(
   const width = metadata.width ?? viewport.width;
   const height = metadata.height ?? viewport.height;
   const imageViewport = { width, height };
-  const redactions = await detectRedactions(screenshotPath, domText, imageViewport);
-  const overlaySvg = buildOverlaySvg(redactions, width, height);
+  const detection = await detectRedactions(screenshotPath, domText, imageViewport);
+  const overlaySvg = buildOverlaySvg(detection.redactions, width, height);
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await sharp(screenshotPath)
@@ -33,7 +32,9 @@ export async function redactScreenshot(
     redactedScreenshotPath: outputPath,
     redactedScreenshotBase64,
     viewport: imageViewport,
-    redactions
+    redactions: detection.redactions,
+    redactorFailed: detection.redactorFailed,
+    redactorFailureReason: detection.redactorFailureReason
   };
 }
 
@@ -41,14 +42,14 @@ async function detectRedactions(
   screenshotPath: string,
   domText: VisibleDomText[],
   viewport: Viewport
-): Promise<Redaction[]> {
+): Promise<Pick<RedactorOutput, "redactions" | "redactorFailed" | "redactorFailureReason">> {
   const mode = getRedactorMode();
   const fallbackEnabled = process.env.SAFE_SCREEN_REDACTOR_FALLBACK !== "false";
   const ruleRedactions = collectRuleRedactions(domText, viewport);
 
   if (mode === "rules") {
     console.log("SafeScreen redactor: using local rule-based detector.");
-    return ruleRedactions;
+    return { redactions: ruleRedactions };
   }
 
   if (!process.env.BREV_REDACTOR_URL) {
@@ -56,8 +57,9 @@ async function detectRedactions(
       throw new Error("BREV_REDACTOR_URL is required when SAFE_SCREEN_REDACTOR_MODE is not 'rules'.");
     }
 
-    warnBrevFallback("BREV_REDACTOR_URL is not set.");
-    return collectRuleRedactions(domText, viewport);
+    const reason = "BREV_REDACTOR_URL is not set.";
+    warnBrevFallback(reason);
+    return { redactions: collectRuleRedactions(domText, viewport), redactorFailed: true, redactorFailureReason: reason };
   }
 
   try {
@@ -65,17 +67,18 @@ async function detectRedactions(
     console.log(`SafeScreen redactor: Brev returned ${brevRedactions.length} redaction(s).`);
 
     if (mode === "hybrid" || process.env.SAFE_SCREEN_RULE_VALUE_FALLBACK !== "false") {
-      return dedupeRedactions([...brevRedactions, ...ruleRedactions]);
+      return { redactions: dedupeRedactions([...brevRedactions, ...ruleRedactions]) };
     }
 
-    return brevRedactions;
+    return { redactions: brevRedactions };
   } catch (error) {
     if (!fallbackEnabled) {
       throw error;
     }
 
-    warnBrevFallback((error as Error).message);
-    return collectRuleRedactions(domText, viewport);
+    const reason = (error as Error).message;
+    warnBrevFallback(reason);
+    return { redactions: collectRuleRedactions(domText, viewport), redactorFailed: true, redactorFailureReason: reason };
   }
 }
 
@@ -112,7 +115,7 @@ function collectRuleRedactions(domText: VisibleDomText[], viewport: Viewport): R
 
     redactions.push({
       placeholder,
-      value: PLACEHOLDER_VAULT[placeholder],
+      value: getKnownVaultValue(placeholder) ?? "",
       box: padAndClampBox(item.box, 6, viewport),
       source: item,
       category: placeholderToCategory(placeholder),
@@ -370,9 +373,7 @@ function normalizeBrevRedaction(
 
   return [{
     placeholder,
-    value: placeholder in PLACEHOLDER_VAULT
-      ? PLACEHOLDER_VAULT[placeholder as Placeholder]
-      : source?.text ?? "",
+    value: getKnownVaultValue(placeholder as Placeholder) ?? source?.text ?? "",
     box: padAndClampBox(box, 6, viewport),
     source: source ?? {
       text: readString(raw.text) ?? "",
@@ -431,11 +432,13 @@ function normalizePlaceholder(rawPlaceholder: string | undefined, category: stri
     credit_card: "[MY_CARD]",
     email: "[MY_EMAIL]",
     name: "[MY_NAME]",
+    password: "[MY_PASSWORD]",
     person_name: "[MY_NAME]",
     phone: "[MY_PHONE]",
     ssn: "[MY_SSN]",
     social_security: "[MY_SSN]",
-    social_security_number: "[MY_SSN]"
+    social_security_number: "[MY_SSN]",
+    username: "[MY_USERNAME]"
   };
 
   return categoryMap[normalizedCategory] ?? `[PRIVATE_${normalizedCategory.toUpperCase() || "INFO"}]`;
@@ -444,8 +447,8 @@ function normalizePlaceholder(rawPlaceholder: string | undefined, category: stri
 function detectPlaceholder(text: string): Placeholder | undefined {
   const normalized = text.trim();
 
-  for (const placeholder of PLACEHOLDERS) {
-    if (normalized.includes(PLACEHOLDER_VAULT[placeholder])) {
+  for (const [placeholder, value] of Object.entries(getVaultSnapshot()) as Array<[Placeholder, string]>) {
+    if (value && normalized.includes(value)) {
       return placeholder;
     }
   }

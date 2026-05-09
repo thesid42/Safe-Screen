@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { createDemoPageHtml, PLACEHOLDER_VAULT, type Placeholder } from "./demoPage.js";
+import { createDemoPageHtml } from "./demoPage.js";
 import type { DOMRectLike, SafeScreenAction, SanitizedFormField, Viewport, VisibleDomText } from "./types.js";
+import { getVaultSnapshot } from "./vault.js";
 
 type KernelSession = {
   session_id?: string;
@@ -252,7 +253,7 @@ function sanitizeValueToPlaceholder(value: string): string | undefined {
   const normalized = value.trim();
   if (!normalized) return undefined;
 
-  for (const [placeholder, realValue] of Object.entries(PLACEHOLDER_VAULT) as Array<[Placeholder, string]>) {
+  for (const [placeholder, realValue] of Object.entries(getVaultSnapshot())) {
     if (normalized === realValue || normalized.includes(realValue)) {
       return placeholder;
     }
@@ -267,5 +268,6 @@ function sanitizeValueToPlaceholder(value: string): string | undefined {
   if (/\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b/.test(normalized)) return "[MY_SSN]";
   if (/\b(?:\d[ -]*?){13,19}\b/.test(normalized)) return "[MY_CARD]";
   if (/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/.test(normalized)) return "[MY_PHONE]";
+  if (/password/i.test(normalized)) return "[MY_PASSWORD]";
   return "[FILLED]";
 }

@@ -1,10 +1,10 @@
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { PLACEHOLDER_VAULT } from "./demoPage.js";
+import { getVaultSnapshot, normalizePlaceholder, resolveVaultValue } from "./vault.js";
 import type { ActionContext, DOMRectLike, SafeScreenAction } from "./types.js";
 
 const BLOCKED_TEXT_PATTERN = /\b(copy|clipboard|reveal|show|print|export|download|exfiltrate|send|upload)\b/i;
-const ANY_PLACEHOLDER_PATTERN = /\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD)\]?/g;
+const ANY_PLACEHOLDER_PATTERN = /\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD|USERNAME|PASSWORD)\]?/g;
 
 export async function guardAction(action: unknown, context: ActionContext): Promise<SafeScreenAction> {
   const normalized = normalizeAction(action);
@@ -21,10 +21,11 @@ export async function guardAction(action: unknown, context: ActionContext): Prom
     if (BLOCKED_TEXT_PATTERN.test(normalized.text)) {
       throw new Error(`Blocked unsafe typing request: ${normalized.text}`);
     }
+    blockLiteralVaultTyping(normalized.text);
 
     return {
       ...normalized,
-      text: replacePlaceholders(normalized.text)
+      text: await replacePlaceholders(normalized.text)
     };
   }
 
@@ -111,15 +112,33 @@ function validateClick(action: Extract<SafeScreenAction, { type: "click" }>, con
   }
 }
 
-function replacePlaceholders(text: string): string {
-  return text.replace(ANY_PLACEHOLDER_PATTERN, (placeholder) => {
-    const normalizedPlaceholder = placeholder.startsWith("[") ? placeholder : `[${placeholder}]`;
-    const value = PLACEHOLDER_VAULT[normalizedPlaceholder as keyof typeof PLACEHOLDER_VAULT];
-    if (!value) {
-      throw new Error(`Unknown placeholder: ${placeholder}`);
+async function replacePlaceholders(text: string): Promise<string> {
+  const matches = [...text.matchAll(ANY_PLACEHOLDER_PATTERN)];
+  let replaced = text;
+
+  for (const match of matches) {
+    const rawPlaceholder = match[0];
+    const placeholder = normalizePlaceholder(rawPlaceholder);
+    if (!placeholder) {
+      throw new Error(`Unknown placeholder: ${rawPlaceholder}`);
     }
-    return value;
-  });
+    const value = await resolveVaultValue(placeholder);
+    replaced = replaced.replaceAll(rawPlaceholder, value);
+  }
+
+  return replaced;
+}
+
+function blockLiteralVaultTyping(text: string): void {
+  if (process.env.SAFE_SCREEN_ALLOW_LITERAL_VAULT_TYPING === "true") {
+    return;
+  }
+
+  for (const [placeholder, value] of Object.entries(getVaultSnapshot())) {
+    if (value && text.includes(value)) {
+      throw new Error(`Blocked model attempt to type literal vault value for ${placeholder}. The model must use placeholders.`);
+    }
+  }
 }
 
 function pointInBox(x: number, y: number, box: DOMRectLike): boolean {
