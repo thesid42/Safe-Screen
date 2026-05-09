@@ -1,16 +1,18 @@
 export const PLACEHOLDER_VAULT = {
-  "[MY_NAME]": "Anmol Sharma",
-  "[MY_EMAIL]": "anmol@example.com",
-  "[MY_PHONE]": "925-555-1234",
-  "[MY_SSN]": "123-45-6789",
-  "[MY_ADDRESS]": "123 Main St, San Ramon, CA",
-  "[MY_CARD]": "4111 1111 1111 1111"
+  "[MY_NAME]": process.env.SAFE_SCREEN_MY_NAME || "Anmol Sharma",
+  "[MY_EMAIL]": process.env.SAFE_SCREEN_MY_EMAIL || "anmol@example.com",
+  "[MY_PHONE]": process.env.SAFE_SCREEN_MY_PHONE || "925-555-1234",
+  "[MY_SSN]": process.env.SAFE_SCREEN_MY_SSN || "123-45-6789",
+  "[MY_ADDRESS]": process.env.SAFE_SCREEN_MY_ADDRESS || "123 Main St, San Ramon, CA",
+  "[MY_CARD]": process.env.SAFE_SCREEN_MY_CARD || "4111 1111 1111 1111"
 } as const;
 
 export type Placeholder = keyof typeof PLACEHOLDER_VAULT;
 
 export function createDemoPageHtml(): string {
   const vault = PLACEHOLDER_VAULT;
+  const prefill = process.env.SAFE_SCREEN_DEMO_PREFILL === "true";
+  const value = (placeholder: Placeholder) => prefill ? vault[placeholder] : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -97,25 +99,25 @@ export function createDemoPageHtml(): string {
   <body>
     <main>
       <h1>SafeScreen demo intake form</h1>
-      <p>This page intentionally contains fake sensitive values for the local redaction demo.</p>
+      <p>This page is used to test local placeholder filling with SafeScreen redaction.</p>
       <form id="safe-form">
         <label for="name">Full name
-          <input id="name" name="name" autocomplete="name" value="${vault["[MY_NAME]"]}" />
+          <input id="name" name="name" autocomplete="name" value="${value("[MY_NAME]")}" />
         </label>
         <label for="email">Email
-          <input id="email" name="email" type="email" autocomplete="email" value="${vault["[MY_EMAIL]"]}" />
+          <input id="email" name="email" type="email" autocomplete="email" value="${value("[MY_EMAIL]")}" />
         </label>
         <label for="phone">Phone
-          <input id="phone" name="phone" autocomplete="tel" value="${vault["[MY_PHONE]"]}" />
+          <input id="phone" name="phone" autocomplete="tel" value="${value("[MY_PHONE]")}" />
         </label>
         <label for="ssn">SSN
-          <input id="ssn" name="ssn" value="${vault["[MY_SSN]"]}" />
+          <input id="ssn" name="ssn" value="${value("[MY_SSN]")}" />
         </label>
         <label for="address">Address
-          <input id="address" name="address" autocomplete="street-address" value="${vault["[MY_ADDRESS]"]}" />
+          <input id="address" name="address" autocomplete="street-address" value="${value("[MY_ADDRESS]")}" />
         </label>
         <label for="card">Credit card
-          <input id="card" name="card" autocomplete="cc-number" value="${vault["[MY_CARD]"]}" />
+          <input id="card" name="card" autocomplete="cc-number" value="${value("[MY_CARD]")}" />
         </label>
         <button id="submit" type="submit">Submit</button>
         <div id="result" role="status" aria-live="polite"></div>

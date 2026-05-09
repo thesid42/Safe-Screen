@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { createDemoPageHtml } from "./demoPage.js";
-import type { DOMRectLike, SafeScreenAction, Viewport, VisibleDomText } from "./types.js";
+import { createDemoPageHtml, PLACEHOLDER_VAULT, type Placeholder } from "./demoPage.js";
+import type { DOMRectLike, SafeScreenAction, SanitizedFormField, Viewport, VisibleDomText } from "./types.js";
 
 type KernelSession = {
   session_id?: string;
@@ -126,6 +126,62 @@ export class KernelClient {
       : undefined;
   }
 
+  async extractSanitizedFormState(): Promise<SanitizedFormField[]> {
+    const page = await this.getPage();
+    const rawFields = await page.evaluate(`
+      (() => {
+        const active = document.activeElement;
+        const fields = [];
+
+        for (const element of Array.from(document.querySelectorAll("input, textarea, select"))) {
+          const rect = element.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) continue;
+
+          const labels = element.id
+            ? Array.from(document.querySelectorAll('label[for="' + CSS.escape(element.id) + '"]')).map((label) => label.textContent || "")
+            : [];
+          const parentLabel = element.closest("label")?.textContent || "";
+          const ariaLabel = element.getAttribute("aria-label") || "";
+          const placeholder = element.getAttribute("placeholder") || "";
+          const label = (labels[0] || parentLabel || ariaLabel || placeholder || element.getAttribute("name") || element.id || "field")
+            .replace(/\\s+/g, " ")
+            .trim();
+
+          fields.push({
+            id: element.id || undefined,
+            name: element.getAttribute("name") || undefined,
+            type: element.getAttribute("type") || element.tagName.toLowerCase(),
+            label,
+            value: "value" in element ? element.value : "",
+            focused: active === element,
+            box: {
+              x: Math.max(0, rect.left),
+              y: Math.max(0, rect.top),
+              width: rect.width,
+              height: rect.height
+            }
+          });
+        }
+
+        return fields;
+      })()
+    `) as Array<SanitizedFormField & { value?: string }>;
+
+    return rawFields.map((field) => {
+      const valueLabel = sanitizeValueToPlaceholder(field.value ?? "");
+      return {
+        id: field.id,
+        name: field.name,
+        type: field.type,
+        label: field.label,
+        status: valueLabel || (field.value ?? "").trim() ? "filled" : "empty",
+        valueLabel,
+        focused: field.focused,
+        box: field.box
+      };
+    });
+  }
+
   async executeAction(action: SafeScreenAction): Promise<void> {
     const page = await this.getPage();
 
@@ -179,4 +235,21 @@ export class KernelClient {
 
     return this.page;
   }
+}
+
+function sanitizeValueToPlaceholder(value: string): string | undefined {
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+
+  for (const [placeholder, realValue] of Object.entries(PLACEHOLDER_VAULT) as Array<[Placeholder, string]>) {
+    if (normalized === realValue || normalized.includes(realValue)) {
+      return placeholder;
+    }
+  }
+
+  if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized)) return "[MY_EMAIL]";
+  if (/\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b/.test(normalized)) return "[MY_SSN]";
+  if (/\b(?:\d[ -]*?){13,19}\b/.test(normalized)) return "[MY_CARD]";
+  if (/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/.test(normalized)) return "[MY_PHONE]";
+  return "[FILLED]";
 }

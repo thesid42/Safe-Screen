@@ -121,26 +121,34 @@ async function collectBrevRedactions(
   domText: VisibleDomText[],
   viewport: Viewport
 ): Promise<Redaction[]> {
-  const endpoint = buildBrevRedactorEndpoint(process.env.BREV_REDACTOR_URL);
+  const api = getBrevRedactorApi();
+  const endpoint = api === "vllm-chat"
+    ? buildVllmChatEndpoint(process.env.BREV_REDACTOR_URL)
+    : buildBrevRedactorEndpoint(process.env.BREV_REDACTOR_URL);
+  console.log(`SafeScreen redactor: calling ${api} endpoint ${endpoint}`);
   const rawScreenshotBase64 = await fs.readFile(screenshotPath, "base64");
   const timeoutMs = Number.parseInt(process.env.BREV_REDACTOR_TIMEOUT_MS ?? "30000", 10);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const body = api === "vllm-chat"
+      ? buildVllmChatBody(rawScreenshotBase64, domText, viewport)
+      : {
+          model: requireEnv("BREV_REDACTOR_MODEL"),
+          policy: process.env.SAFE_SCREEN_REDACTION_POLICY || DEFAULT_REDACTION_POLICY,
+          screenshot_base64: rawScreenshotBase64,
+          viewport,
+          dom_text: domText
+        };
+
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...buildBrevAuthHeaders()
       },
-      body: JSON.stringify({
-        model: requireEnv("BREV_REDACTOR_MODEL"),
-        policy: process.env.SAFE_SCREEN_REDACTION_POLICY || DEFAULT_REDACTION_POLICY,
-        screenshot_base64: rawScreenshotBase64,
-        viewport,
-        dom_text: domText
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal
     });
 
@@ -150,10 +158,20 @@ async function collectBrevRedactions(
     }
 
     const payload = await response.json() as unknown;
-    return parseBrevRedactions(payload, domText, viewport);
+    const redactionPayload = api === "vllm-chat" ? parseVllmChatRedactionPayload(payload) : payload;
+    return parseBrevRedactions(redactionPayload, domText, viewport);
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function getBrevRedactorApi(): "redact" | "vllm-chat" {
+  const configured = process.env.BREV_REDACTOR_API?.trim().toLowerCase();
+  if (configured === "vllm-chat" || configured === "openai-chat") {
+    return "vllm-chat";
+  }
+
+  return "redact";
 }
 
 function buildBrevRedactorEndpoint(baseUrl: string | undefined): string {
@@ -161,12 +179,143 @@ function buildBrevRedactorEndpoint(baseUrl: string | undefined): string {
     throw new Error("BREV_REDACTOR_URL is not set.");
   }
 
-  const url = new URL(baseUrl);
+  const normalizedBaseUrl = /^https?:\/\//i.test(baseUrl)
+    ? baseUrl
+    : `http://${baseUrl}`;
+  const url = new URL(normalizedBaseUrl);
+
   if (url.pathname === "/" || url.pathname === "") {
     url.pathname = "/redact";
   }
 
   return url.toString();
+}
+
+function buildVllmChatEndpoint(baseUrl: string | undefined): string {
+  if (!baseUrl) {
+    throw new Error("BREV_REDACTOR_URL is not set.");
+  }
+
+  const normalizedBaseUrl = /^https?:\/\//i.test(baseUrl)
+    ? baseUrl
+    : `http://${baseUrl}`;
+  const url = new URL(normalizedBaseUrl);
+
+  if (url.pathname === "/" || url.pathname === "") {
+    url.pathname = "/v1/chat/completions";
+  } else if (url.pathname === "/v1" || url.pathname === "/v1/") {
+    url.pathname = "/v1/chat/completions";
+  } else if (!url.pathname.endsWith("/chat/completions")) {
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/chat/completions`;
+  }
+
+  return url.toString();
+}
+
+function buildVllmChatBody(rawScreenshotBase64: string, domText: VisibleDomText[], viewport: Viewport): Record<string, unknown> {
+  const model = requireEnv("BREV_REDACTOR_MODEL");
+  const policy = process.env.SAFE_SCREEN_REDACTION_POLICY || DEFAULT_REDACTION_POLICY;
+  const compactDomText = domText.slice(0, 160).map((item, index) => ({
+    index,
+    text: item.text,
+    box: item.box,
+    tagName: item.tagName,
+    id: item.id,
+    name: item.name,
+    type: item.type
+  }));
+
+  return {
+    model,
+    temperature: 0,
+    max_tokens: getBrevMaxTokens(),
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are SafeScreen's trusted local redaction detector. Return only valid JSON. Do not include markdown."
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text:
+              `Policy: ${policy}\n` +
+              `Viewport: ${JSON.stringify(viewport)}\n` +
+              "Return JSON in this exact shape: {\"redactions\":[{\"placeholder\":\"[MY_EMAIL]\",\"category\":\"email\",\"confidence\":0.98,\"box\":{\"x\":0,\"y\":0,\"width\":10,\"height\":10},\"domId\":\"optional\"}]}.\n" +
+              "Use placeholders [MY_NAME], [MY_EMAIL], [MY_PHONE], [MY_SSN], [MY_ADDRESS], [MY_CARD], or [PRIVATE_INFO].\n" +
+              "Prefer the provided DOM boxes when a DOM item text is sensitive. DOM items:\n" +
+              JSON.stringify(compactDomText)
+          },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${rawScreenshotBase64}`
+            }
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function getBrevMaxTokens(): number {
+  const configured = Number.parseInt(process.env.BREV_REDACTOR_MAX_TOKENS ?? "2048", 10);
+  if (!Number.isFinite(configured)) {
+    return 2048;
+  }
+
+  return Math.min(Math.max(configured, 128), 4096);
+}
+
+function parseVllmChatRedactionPayload(payload: unknown): unknown {
+  const content = readVllmMessageContent(payload);
+  if (!content) {
+    throw new Error("vLLM chat response did not include message content.");
+  }
+
+  const jsonText = extractJsonObject(content);
+  return JSON.parse(jsonText) as unknown;
+}
+
+function readVllmMessageContent(payload: unknown): string | undefined {
+  const candidate = payload as {
+    choices?: Array<{ message?: { content?: unknown } }>;
+  };
+  const content = candidate.choices?.[0]?.message?.content;
+
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object" && "text" in part) {
+          const text = (part as { text?: unknown }).text;
+          return typeof text === "string" ? text : "";
+        }
+        return "";
+      })
+      .join("");
+  }
+
+  return undefined;
+}
+
+function extractJsonObject(content: string): string {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced?.[1] ?? content;
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error(`vLLM chat response did not contain a JSON object: ${content.slice(0, 240)}`);
+  }
+
+  return candidate.slice(start, end + 1);
 }
 
 function buildBrevAuthHeaders(): Record<string, string> {

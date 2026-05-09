@@ -1,4 +1,4 @@
-import type { Redaction, SafeScreenAction, Viewport } from "./types.js";
+import type { Redaction, SafeScreenAction, SanitizedFormField, Viewport } from "./types.js";
 
 type TzafonClientOptions = {
   viewport: Viewport;
@@ -25,6 +25,8 @@ export class TzafonClient {
     goal: string;
     redactedScreenshotBase64: string;
     redactions: Redaction[];
+    formState: SanitizedFormField[];
+    lastActionSummary?: string;
   }): Promise<SafeScreenAction | undefined> {
     if (process.env.TZAFON_API_KEY) {
       try {
@@ -44,9 +46,11 @@ export class TzafonClient {
   private async nextLightconeAction(params: {
     goal: string;
     redactedScreenshotBase64: string;
+    formState: SanitizedFormField[];
+    lastActionSummary?: string;
   }): Promise<SafeScreenAction | undefined> {
     const { default: Lightcone } = await import("@tzafon/lightcone");
-    const model = requireEnv("TZAFON_MODEL");
+    const model = process.env.TZAFON_MODEL?.trim() || "tzafon.northstar-cua-fast";
     const client = new Lightcone({
       apiKey: process.env.TZAFON_API_KEY,
       baseURL: process.env.LIGHTCONE_BASE_URL || undefined
@@ -54,6 +58,7 @@ export class TzafonClient {
 
     const imageUrl = `data:image/png;base64,${params.redactedScreenshotBase64}`;
     console.log("Sending only redacted screenshot data URL to Lightcone/Northstar.");
+    const safeStateText = buildSafeStateText(params.formState, params.lastActionSummary);
 
     const tool = {
       type: "computer_use" as const,
@@ -76,19 +81,26 @@ export class TzafonClient {
               type: "computer_call_output",
               call_id: this.previousCallId,
               output: { type: "input_image", image_url: imageUrl, detail: "auto" }
+            },
+            {
+              role: "user",
+              content: [
+                { type: "input_text", text: safeStateText },
+                { type: "input_image", image_url: imageUrl, detail: "auto" }
+              ]
             }
           ]
         })
       : await responses.create({
           model,
           instructions:
-            "You operate a browser using only redacted screenshots. Use placeholders like [MY_EMAIL] when typing sensitive values. Do not ask to reveal, copy, print, or export private data.",
+            "You operate a browser using only redacted screenshots. Use exactly one GUI action per turn. When a target text field is focused, use a type action with the requested placeholder text, for example [MY_EMAIL]. Do not ask to reveal, copy, print, export, or inspect private data.",
           tools: [tool],
           input: [
             {
               role: "user",
               content: [
-                { type: "input_text", text: params.goal },
+                { type: "input_text", text: `${params.goal}\n\n${safeStateText}` },
                 { type: "input_image", image_url: imageUrl, detail: "auto" }
               ]
             }
@@ -193,6 +205,23 @@ export class TzafonClient {
   }
 }
 
+function buildSafeStateText(formState: SanitizedFormField[], lastActionSummary?: string): string {
+  const fields = formState.map((field) => {
+    const identity = field.label || field.name || field.id || "field";
+    const value = field.status === "filled" ? field.valueLabel ?? "[FILLED]" : "empty";
+    const focused = field.focused ? ", focused" : "";
+    return `- ${identity}: ${value}${focused}`;
+  });
+
+  return [
+    "SafeScreen sanitized page state. Values are placeholders only; never ask for real private values.",
+    lastActionSummary ? `Last executed action: ${lastActionSummary}` : "Last executed action: none.",
+    "Fields:",
+    fields.length ? fields.join("\n") : "- no form fields detected",
+    "Choose the next GUI action. If the email field is focused and empty, type [MY_EMAIL]. If email is filled, move toward submit."
+  ].join("\n");
+}
+
 function requireNumber(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`Action field '${field}' must be a finite number.`);
@@ -208,14 +237,5 @@ function requireString(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw new Error(`Action field '${field}' must be a string.`);
   }
-  return value;
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`${name} must be set when using Lightcone/Northstar.`);
-  }
-
   return value;
 }

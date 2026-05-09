@@ -2,3 +2,27 @@ node_modules/
 dist/
 .env
 artifacts/*.png
+
+# Local OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build/test/cache output
+coverage/
+.cache/
+.tsx/
+
+# Local model/cache data from docker compose
+cache/
+
+# Additional local env files
+.env.local
+.env.*.local

@@ -21,6 +21,17 @@ export type VisibleDomText = {
   type?: string;
 };
 
+export type SanitizedFormField = {
+  id?: string;
+  name?: string;
+  type?: string;
+  label: string;
+  status: "empty" | "filled";
+  valueLabel?: string;
+  focused: boolean;
+  box: DOMRectLike;
+};
+
 export type Viewport = {
   width: number;
   height: number;

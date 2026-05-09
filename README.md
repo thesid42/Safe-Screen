@@ -76,6 +76,17 @@ If `KERNEL_API_KEY` is missing, SafeScreen uses a local Playwright Chromium brow
 
 If `BREV_REDACTOR_URL` is set, SafeScreen calls that service for smart redaction. If it is missing or unavailable and `SAFE_SCREEN_REDACTOR_FALLBACK=true`, SafeScreen falls back to local rule-based redaction.
 
+For a raw vLLM/OpenAI-compatible Qwen VL server, use:
+
+```bash
+SAFE_SCREEN_REDACTOR_MODE=brev
+BREV_REDACTOR_API=vllm-chat
+BREV_REDACTOR_URL=http://localhost:12434/v1
+BREV_REDACTOR_MODEL=Qwen/Qwen3-VL-4B-Instruct
+```
+
+SafeScreen will call `/v1/chat/completions` and parse the model's JSON response into redaction boxes.
+
 ## Brev Redactor Contract
 
 SafeScreen expects the Brev instance to expose:
@@ -134,6 +145,14 @@ The demo writes:
 - `artifacts/raw-step-1.png`
 - `artifacts/redacted-step-1.png`
 
+By default, the built-in demo form starts empty so the CUA flow can fill it. Set this to show the original prefilled redaction-proof page:
+
+```bash
+SAFE_SCREEN_DEMO_PREFILL=true
+```
+
+On every step, SafeScreen also sends Northstar a sanitized form-state summary such as `Email: empty`, `Email: [MY_EMAIL] (focused)`, or `Email: [MY_EMAIL]`. These summaries never include raw private values.
+
 The mock CUA sequence does this:
 
 1. Click the email field.
@@ -141,6 +160,12 @@ The mock CUA sequence does this:
 3. Click Submit.
 
 Before the submit click, SafeScreen asks for console approval. Type `yes` to allow it.
+
+If the real CUA model repeatedly clicks the focused email field during the hackathon demo, SafeScreen applies a small local progress override and converts the repeated click into typing `[MY_EMAIL]`. Disable that behavior with:
+
+```bash
+SAFE_SCREEN_DEMO_PROGRESS_OVERRIDE=false
+```
 
 ## Verification Checklist
 
