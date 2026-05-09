@@ -255,7 +255,9 @@ function buildVllmChatBody(rawScreenshotBase64: string, domText: VisibleDomText[
               `Policy: ${policy}\n` +
               `Viewport: ${JSON.stringify(viewport)}\n` +
               "Return JSON in this exact shape: {\"redactions\":[{\"placeholder\":\"[MY_EMAIL]\",\"category\":\"email\",\"confidence\":0.98,\"box\":{\"x\":0,\"y\":0,\"width\":10,\"height\":10},\"domId\":\"optional\"}]}.\n" +
-              "Use placeholders [MY_NAME], [MY_EMAIL], [MY_PHONE], [MY_SSN], [MY_ADDRESS], [MY_CARD], or [PRIVATE_INFO].\n" +
+              "Use placeholders: [MY_NAME], [MY_EMAIL], [MY_PHONE], [MY_SSN], [MY_ADDRESS], [MY_CARD], [MY_DOB], [MY_MRN], [MY_DIAGNOSIS], [MY_INSURANCE_ID], or [PRIVATE_INFO].\n" +
+              "HIPAA PHI to detect: patient names, dates of birth (DOB), social security numbers, medical record numbers (MRN), diagnoses/conditions/ICD codes, insurance member IDs, phone numbers, email addresses, and postal addresses.\n" +
+              "Do NOT redact: physician names, hospital/facility names, medication names, visit dates (future or current year), field labels, button text, or empty input boxes.\n" +
               "Do not redact field labels, legends, button text, or empty input boxes. If the visible field is empty, return no redaction for it. Prefer the provided DOM boxes only when a DOM item text contains a sensitive value. DOM items:\n" +
               JSON.stringify(compactDomText)
           },
@@ -431,7 +433,14 @@ function normalizePlaceholder(rawPlaceholder: string | undefined, category: stri
     address: "[MY_ADDRESS]",
     card: "[MY_CARD]",
     credit_card: "[MY_CARD]",
+    date_of_birth: "[MY_DOB]",
+    dob: "[MY_DOB]",
+    diagnosis: "[MY_DIAGNOSIS]",
     email: "[MY_EMAIL]",
+    insurance: "[MY_INSURANCE_ID]",
+    insurance_id: "[MY_INSURANCE_ID]",
+    medical_record: "[MY_MRN]",
+    mrn: "[MY_MRN]",
     name: "[MY_NAME]",
     password: "[MY_PASSWORD]",
     person_name: "[MY_NAME]",
@@ -448,7 +457,9 @@ function normalizePlaceholder(rawPlaceholder: string | undefined, category: stri
 function detectPlaceholder(text: string): Placeholder | undefined {
   const normalized = text.trim();
 
-  for (const [placeholder, value] of Object.entries(getVaultSnapshot()) as Array<[Placeholder, string]>) {
+  // Compare against all known vault values, including demo defaults so the
+  // rule-based detector works correctly on demo pages without .env overrides.
+  for (const [placeholder, value] of Object.entries(getVaultSnapshot({ includeDemoDefaults: true })) as Array<[Placeholder, string]>) {
     if (value && normalized.includes(value)) {
       return placeholder;
     }
@@ -456,11 +467,16 @@ function detectPlaceholder(text: string): Placeholder | undefined {
 
   if (/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(normalized)) return "[MY_EMAIL]";
   if (/\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b/.test(normalized)) return "[MY_SSN]";
-  if (/\b(?:\d[ -]*?){13,19}\b/.test(normalized)) return "[MY_CARD]";
+  // Credit card: 13-19 consecutive digits — must NOT look like an insurance ID (letters present)
+  if (/^\d{13,19}$/.test(normalized.replace(/[\s-]/g, ""))) return "[MY_CARD]";
   if (/\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/.test(normalized)) return "[MY_PHONE]";
   if (/\b\d{1,6}\s+[A-Za-z0-9 .'-]+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Drive|Dr|Lane|Ln)\b/i.test(normalized)) {
     return "[MY_ADDRESS]";
   }
+  // HIPAA PHI patterns
+  if (/\bMRN[-]?\s*\d{4,}/i.test(normalized)) return "[MY_MRN]";
+  if (/\b[A-Z]{2,4}-\d{4,}[-\w]*/i.test(normalized)) return "[MY_INSURANCE_ID]";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return "[MY_DOB]";
 
   return undefined;
 }

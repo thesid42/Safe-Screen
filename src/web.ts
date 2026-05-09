@@ -562,6 +562,7 @@ const DASHBOARD_HTML = `<!doctype html>
               <option value="multistep">Multi-step form</option>
               <option value="statement">Account statement</option>
               <option value="profile">Profile review</option>
+              <option value="health">HIPAA Health Record</option>
             </select>
           </label>
           <label>Target URL (optional, overrides scenario)

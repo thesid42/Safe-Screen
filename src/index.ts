@@ -192,7 +192,7 @@ async function focusFieldForTypeIfNeeded(
 }
 
 function extractPlaceholder(text: string): string | undefined {
-  const match = text.match(/\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD)\]?/);
+  const match = text.match(/\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD|DOB|MRN|DIAGNOSIS|INSURANCE_ID)\]?/);
   if (!match) return undefined;
   return match[0].startsWith("[") ? match[0] : `[${match[0]}]`;
 }
@@ -206,6 +206,11 @@ function fieldPlaceholder(field: SanitizedFormField): string | undefined {
   if (/\b(ssn|social security)\b/.test(identity)) return "[MY_SSN]";
   if (/\b(address|street)\b/.test(identity)) return "[MY_ADDRESS]";
   if (/\b(credit card|card|cc-number)\b/.test(identity)) return "[MY_CARD]";
+  // HIPAA PHI fields
+  if (/\b(dob|date of birth|birthdate|birth date)\b/.test(identity)) return "[MY_DOB]";
+  if (/\b(mrn|medical record|patient id)\b/.test(identity)) return "[MY_MRN]";
+  if (/\b(diagnosis|condition|icd)\b/.test(identity)) return "[MY_DIAGNOSIS]";
+  if (/\b(insurance|member id|policy|insurance id)\b/.test(identity)) return "[MY_INSURANCE_ID]";
 
   return undefined;
 }

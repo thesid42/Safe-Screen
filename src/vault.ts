@@ -9,7 +9,11 @@ export const PLACEHOLDERS = [
   "[MY_ADDRESS]",
   "[MY_CARD]",
   "[MY_USERNAME]",
-  "[MY_PASSWORD]"
+  "[MY_PASSWORD]",
+  "[MY_DOB]",
+  "[MY_MRN]",
+  "[MY_DIAGNOSIS]",
+  "[MY_INSURANCE_ID]"
 ] as const;
 
 export type Placeholder = typeof PLACEHOLDERS[number];
@@ -22,7 +26,11 @@ const ENV_BY_PLACEHOLDER: Record<Placeholder, string> = {
   "[MY_ADDRESS]": "SAFE_SCREEN_MY_ADDRESS",
   "[MY_CARD]": "SAFE_SCREEN_MY_CARD",
   "[MY_USERNAME]": "SAFE_SCREEN_MY_USERNAME",
-  "[MY_PASSWORD]": "SAFE_SCREEN_MY_PASSWORD"
+  "[MY_PASSWORD]": "SAFE_SCREEN_MY_PASSWORD",
+  "[MY_DOB]": "SAFE_SCREEN_MY_DOB",
+  "[MY_MRN]": "SAFE_SCREEN_MY_MRN",
+  "[MY_DIAGNOSIS]": "SAFE_SCREEN_MY_DIAGNOSIS",
+  "[MY_INSURANCE_ID]": "SAFE_SCREEN_MY_INSURANCE_ID"
 };
 
 const DEMO_DEFAULTS: Record<Placeholder, string> = {
@@ -33,7 +41,11 @@ const DEMO_DEFAULTS: Record<Placeholder, string> = {
   "[MY_ADDRESS]": "123 Main St, San Ramon, CA",
   "[MY_CARD]": "4111 1111 1111 1111",
   "[MY_USERNAME]": "tomsmith",
-  "[MY_PASSWORD]": "SuperSecretPassword!"
+  "[MY_PASSWORD]": "SuperSecretPassword!",
+  "[MY_DOB]": "1988-04-15",
+  "[MY_MRN]": "MRN-7741829",
+  "[MY_DIAGNOSIS]": "Type 2 Diabetes Mellitus (E11.9)",
+  "[MY_INSURANCE_ID]": "BCB-447821-X"
 };
 
 const runtimeVault = new Map<Placeholder, string>();

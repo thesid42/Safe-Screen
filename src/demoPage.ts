@@ -12,6 +12,10 @@ export function createDemoPageHtml(): string {
     return wrapDemoPage("SafeScreen profile review", createProfileReviewHtml());
   }
 
+  if (scenario === "health") {
+    return wrapDemoPage("SafeScreen HIPAA health record", createHealthRecordHtml());
+  }
+
   return wrapDemoPage("SafeScreen multi-step intake", createMultiStepFormHtml());
 }
 
@@ -175,6 +179,103 @@ function createProfileReviewHtml(): string {
       </section>
       <div id="result" role="status">Profile loaded.</div>
     </main>`;
+}
+
+function createHealthRecordHtml(): string {
+  const vault = getVaultSnapshot({ includeDemoDefaults: true });
+
+  return `
+    <main class="wide">
+      <div class="health-header">
+        <div>
+          <span class="kicker hipaa-badge">HIPAA Protected Health Information</span>
+          <h1>Patient Health Record</h1>
+          <p>Read-only HIPAA-compliant patient record for testing SafeScreen PHI redaction coverage.</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Patient Demographics</h2>
+        <div class="summary-grid">
+          <div><span>Full name</span><strong>${escapeHtml(vault["[MY_NAME]"])}</strong></div>
+          <div><span>Date of birth</span><strong>${escapeHtml(vault["[MY_DOB]"])}</strong></div>
+          <div><span>SSN</span><strong>${escapeHtml(vault["[MY_SSN]"])}</strong></div>
+          <div><span>Medical Record Number (MRN)</span><strong>${escapeHtml(vault["[MY_MRN]"])}</strong></div>
+          <div><span>Phone</span><strong>${escapeHtml(vault["[MY_PHONE]"])}</strong></div>
+          <div><span>Email</span><strong>${escapeHtml(vault["[MY_EMAIL]"])}</strong></div>
+          <div><span>Address</span><strong>${escapeHtml(vault["[MY_ADDRESS]"])}</strong></div>
+          <div><span>Insurance ID</span><strong>${escapeHtml(vault["[MY_INSURANCE_ID]"])}</strong></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Clinical Information</h2>
+        <div class="summary-grid">
+          <div><span>Primary diagnosis</span><strong>${escapeHtml(vault["[MY_DIAGNOSIS]"])}</strong></div>
+          <div><span>Attending physician</span><strong>Dr. Sarah Chen, MD</strong></div>
+          <div><span>Visit date</span><strong>2026-04-28</strong></div>
+          <div><span>Facility</span><strong>Valley General Hospital</strong></div>
+        </div>
+        <div class="clinical-note">
+          <span class="kicker">Clinical notes</span>
+          <p>Patient ${escapeHtml(vault["[MY_NAME]"])} (DOB ${escapeHtml(vault["[MY_DOB]"])}, MRN ${escapeHtml(vault["[MY_MRN]"])}) presents with ${escapeHtml(vault["[MY_DIAGNOSIS]"])}. HbA1c elevated at 8.4%. Patient advised to continue Metformin 1000 mg twice daily. Follow-up in 3 months. Emergency contact reachable at ${escapeHtml(vault["[MY_PHONE]"])}.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Insurance &amp; Billing</h2>
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Value</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Insurance provider</td><td>BlueCross BlueShield</td></tr>
+            <tr><td>Member ID</td><td>${escapeHtml(vault["[MY_INSURANCE_ID]"])}</td></tr>
+            <tr><td>Policy holder SSN</td><td>${escapeHtml(vault["[MY_SSN]"])}</td></tr>
+            <tr><td>Billing address</td><td>${escapeHtml(vault["[MY_ADDRESS]"])}</td></tr>
+            <tr><td>Copay collected</td><td>$40.00</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Prescriptions</h2>
+        <table>
+          <thead>
+            <tr><th>Medication</th><th>Dosage</th><th>Prescribed to</th><th>Refills</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Metformin HCl</td><td>1000 mg</td><td>${escapeHtml(vault["[MY_NAME]"])}</td><td>3</td></tr>
+            <tr><td>Lisinopril</td><td>10 mg</td><td>${escapeHtml(vault["[MY_NAME]"])}</td><td>5</td></tr>
+            <tr><td>Atorvastatin</td><td>20 mg</td><td>${escapeHtml(vault["[MY_NAME]"])}</td><td>5</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <div id="result" role="status">HIPAA health record loaded. PHI must be fully redacted before CUA access.</div>
+    </main>
+    <style>
+      .health-header { margin-bottom: 8px; }
+      .hipaa-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: #fff3cd;
+        border: 1px solid #ffc107;
+        color: #856404;
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .clinical-note {
+        margin-top: 16px;
+        padding: 14px;
+        background: #f9fbfe;
+        border-left: 4px solid #2069d4;
+        border-radius: 0 6px 6px 0;
+      }
+      .clinical-note p { margin: 6px 0 0; color: #1b2733; line-height: 1.6; }
+    </style>`;
 }
 
 function wrapDemoPage(title: string, body: string): string {
