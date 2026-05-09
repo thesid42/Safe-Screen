@@ -67,10 +67,10 @@ async function detectRedactions(
     console.log(`SafeScreen redactor: Brev returned ${brevRedactions.length} redaction(s).`);
 
     if (mode === "hybrid" || process.env.SAFE_SCREEN_RULE_VALUE_FALLBACK !== "false") {
-      return { redactions: dedupeRedactions([...brevRedactions, ...ruleRedactions]) };
+      return { redactions: suppressCoveredLargeRedactions(dedupeRedactions([...brevRedactions, ...ruleRedactions]), viewport) };
     }
 
-    return { redactions: brevRedactions };
+    return { redactions: suppressCoveredLargeRedactions(brevRedactions, viewport) };
   } catch (error) {
     if (!fallbackEnabled) {
       throw error;
@@ -352,7 +352,8 @@ function parseBrevRedactions(
     throw new Error("Brev redactor response must contain a redactions array.");
   }
 
-  return dedupeRedactions(items.flatMap((item) => normalizeBrevRedaction(item, domText, viewport)));
+  const redactions = items.flatMap((item) => normalizeBrevRedaction(item, domText, viewport));
+  return dedupeRedactions(refineRedactionBoxes(redactions, domText, viewport));
 }
 
 function normalizeBrevRedaction(
@@ -506,6 +507,122 @@ function filterEmptyFieldRedactions(redactions: Redaction[]): Redaction[] {
   });
 }
 
+function refineRedactionBoxes(
+  redactions: Redaction[],
+  domText: VisibleDomText[],
+  viewport: Viewport
+): Redaction[] {
+  return redactions.flatMap((redaction) => {
+    if (!isLargeRedaction(redaction.box, viewport)) {
+      return [redaction];
+    }
+
+    const childRedactions = sensitiveChildrenInside(redaction, domText, viewport);
+    return childRedactions.length ? childRedactions : [redaction];
+  });
+}
+
+function isLargeRedaction(box: DOMRectLike, viewport: Viewport): boolean {
+  const viewportArea = viewport.width * viewport.height;
+  const boxArea = box.width * box.height;
+  return boxArea > viewportArea * 0.04 || box.width > viewport.width * 0.45 || box.height > viewport.height * 0.16;
+}
+
+function sensitiveChildrenInside(redaction: Redaction, domText: VisibleDomText[], viewport: Viewport): Redaction[] {
+  const children: Redaction[] = [];
+
+  for (const item of domText) {
+    if (!boxContains(redaction.box, item.box, 0.85)) continue;
+    if (!isUsableChildRedactionSource(item, redaction.box, viewport)) continue;
+
+    const childPlaceholder = detectPlaceholder(item.text) ?? inferPlaceholderFromText(item.text);
+    if (!childPlaceholder) continue;
+
+    children.push({
+      ...redaction,
+      placeholder: childPlaceholder,
+      value: isKnownPlaceholder(childPlaceholder) ? getKnownVaultValue(childPlaceholder) ?? "" : item.text,
+      box: padAndClampBox(item.box, 6, viewport),
+      source: item,
+      category: isKnownPlaceholder(childPlaceholder) ? placeholderToCategory(childPlaceholder) : privatePlaceholderToCategory(childPlaceholder),
+      confidence: redaction.confidence,
+      detector: redaction.detector
+    });
+  }
+
+  return children;
+}
+
+function isUsableChildRedactionSource(item: VisibleDomText, parentBox: DOMRectLike, viewport: Viewport): boolean {
+  if (isLargeRedaction(item.box, viewport)) return false;
+
+  const parentArea = parentBox.width * parentBox.height;
+  const itemArea = item.box.width * item.box.height;
+  if (parentArea > 0 && itemArea / parentArea > 0.55) return false;
+
+  return countSensitiveMarkers(item.text) <= 1;
+}
+
+function suppressCoveredLargeRedactions(redactions: Redaction[], viewport: Viewport): Redaction[] {
+  return redactions.filter((redaction) => {
+    if (!isLargeRedaction(redaction.box, viewport)) return true;
+
+    const smallerInside = redactions.filter((candidate) => {
+      return candidate !== redaction &&
+        !isLargeRedaction(candidate.box, viewport) &&
+        boxContains(redaction.box, candidate.box, 0.8);
+    });
+
+    return smallerInside.length === 0;
+  });
+}
+
+function countSensitiveMarkers(text: string): number {
+  let count = 0;
+  const snapshot = getVaultSnapshot();
+
+  for (const value of Object.values(snapshot)) {
+    if (value && text.includes(value)) count += 1;
+  }
+
+  const patterns = [
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig,
+    /\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b/g,
+    /\b(?:\d[ -]*?){13,19}\b/g,
+    /\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/g,
+    /\b\d{8,17}\b/g
+  ];
+
+  for (const pattern of patterns) {
+    count += text.match(pattern)?.length ?? 0;
+  }
+
+  return count;
+}
+
+function inferPlaceholderFromText(text: string): string | undefined {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || looksLikeSensitiveFieldLabel(normalized)) return undefined;
+
+  if (/^\d{8,17}$/.test(normalized)) return "[PRIVATE_ACCOUNT]";
+  if (/\b(?:acct|ach|pmt|policy)\b/i.test(text) && /[a-z0-9-]{5,}/i.test(text)) {
+    return "[PRIVATE_REFERENCE]";
+  }
+
+  return undefined;
+}
+
+function isKnownPlaceholder(value: string): value is Placeholder {
+  return (PLACEHOLDERS as readonly string[]).includes(value);
+}
+
+function privatePlaceholderToCategory(value: string): string {
+  return value
+    .replace(/^\[PRIVATE_/, "")
+    .replace("]", "")
+    .toLowerCase();
+}
+
 function looksLikeSensitiveFieldLabel(text: string): boolean {
   return /^(full name|name|email|phone|ssn|social security|address|credit card|card)$/i.test(text.trim());
 }
@@ -522,6 +639,16 @@ function boxesOverlap(a: DOMRectLike, b: DOMRectLike, threshold: number): boolea
   const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   const smallerArea = Math.min(a.width * a.height, b.width * b.height);
   return smallerArea > 0 && intersection / smallerArea >= threshold;
+}
+
+function boxContains(parent: DOMRectLike, child: DOMRectLike, threshold: number): boolean {
+  const x1 = Math.max(parent.x, child.x);
+  const y1 = Math.max(parent.y, child.y);
+  const x2 = Math.min(parent.x + parent.width, child.x + child.width);
+  const y2 = Math.min(parent.y + parent.height, child.y + child.height);
+  const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const childArea = child.width * child.height;
+  return childArea > 0 && intersection / childArea >= threshold;
 }
 
 function placeholderToCategory(placeholder: Placeholder): string {
