@@ -46,6 +46,25 @@ export function createDemoPageHtml(): string {
         margin: 0 0 24px;
         color: #506070;
       }
+      .stepper {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+      .step-pill {
+        border: 1px solid #c9d4df;
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #506070;
+        background: #ffffff;
+      }
+      .step-pill[data-active="true"] {
+        border-color: #2069d4;
+        color: #0f55b8;
+        background: #e9f1ff;
+      }
       form {
         display: grid;
         gap: 16px;
@@ -54,6 +73,23 @@ export function createDemoPageHtml(): string {
         border: 1px solid #d9e2ec;
         border-radius: 8px;
         box-shadow: 0 12px 34px rgb(27 39 51 / 10%);
+      }
+      fieldset {
+        display: grid;
+        gap: 16px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
+      fieldset[hidden] {
+        display: none;
+      }
+      legend {
+        margin: 0 0 2px;
+        padding: 0;
+        font-size: 18px;
+        font-weight: 800;
+        color: #1b2733;
       }
       label {
         display: grid;
@@ -78,7 +114,6 @@ export function createDemoPageHtml(): string {
         background: white;
       }
       button {
-        justify-self: start;
         border: 0;
         border-radius: 6px;
         padding: 11px 18px;
@@ -87,6 +122,19 @@ export function createDemoPageHtml(): string {
         color: white;
         background: #2069d4;
         cursor: pointer;
+      }
+      button.secondary {
+        color: #1b2733;
+        background: #e7edf4;
+      }
+      .actions {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 43px;
+      }
+      .actions .right {
+        margin-left: auto;
       }
       #result {
         min-height: 22px;
@@ -98,32 +146,78 @@ export function createDemoPageHtml(): string {
   </head>
   <body>
     <main>
-      <h1>SafeScreen demo intake form</h1>
-      <p>This page is used to test local placeholder filling with SafeScreen redaction.</p>
+      <h1>SafeScreen multi-step intake</h1>
+      <p>This multi-step form tests placeholder filling, redaction, and progress state across screens.</p>
+      <div class="stepper" aria-label="Progress">
+        <span class="step-pill" data-step-pill="0" data-active="true">Contact</span>
+        <span class="step-pill" data-step-pill="1">Identity</span>
+        <span class="step-pill" data-step-pill="2">Payment</span>
+      </div>
       <form id="safe-form">
-        <label for="name">Full name
-          <input id="name" name="name" autocomplete="name" value="${value("[MY_NAME]")}" />
-        </label>
-        <label for="email">Email
-          <input id="email" name="email" type="email" autocomplete="email" value="${value("[MY_EMAIL]")}" />
-        </label>
-        <label for="phone">Phone
-          <input id="phone" name="phone" autocomplete="tel" value="${value("[MY_PHONE]")}" />
-        </label>
-        <label for="ssn">SSN
-          <input id="ssn" name="ssn" value="${value("[MY_SSN]")}" />
-        </label>
-        <label for="address">Address
-          <input id="address" name="address" autocomplete="street-address" value="${value("[MY_ADDRESS]")}" />
-        </label>
-        <label for="card">Credit card
-          <input id="card" name="card" autocomplete="cc-number" value="${value("[MY_CARD]")}" />
-        </label>
-        <button id="submit" type="submit">Submit</button>
+        <fieldset data-step="0">
+          <legend>Contact details</legend>
+          <label for="name">Full name
+            <input id="name" name="name" autocomplete="name" value="${value("[MY_NAME]")}" />
+          </label>
+          <label for="email">Email
+            <input id="email" name="email" type="email" autocomplete="email" value="${value("[MY_EMAIL]")}" />
+          </label>
+          <div class="actions">
+            <button id="next-contact" class="right" type="button" data-next>Next</button>
+          </div>
+        </fieldset>
+        <fieldset data-step="1" hidden>
+          <legend>Identity and address</legend>
+          <label for="phone">Phone
+            <input id="phone" name="phone" autocomplete="tel" value="${value("[MY_PHONE]")}" />
+          </label>
+          <label for="ssn">SSN
+            <input id="ssn" name="ssn" value="${value("[MY_SSN]")}" />
+          </label>
+          <label for="address">Address
+            <input id="address" name="address" autocomplete="street-address" value="${value("[MY_ADDRESS]")}" />
+          </label>
+          <div class="actions">
+            <button id="back-identity" class="secondary" type="button" data-back>Back</button>
+            <button id="next-identity" type="button" data-next>Next</button>
+          </div>
+        </fieldset>
+        <fieldset data-step="2" hidden>
+          <legend>Payment</legend>
+          <label for="card">Credit card
+            <input id="card" name="card" autocomplete="cc-number" value="${value("[MY_CARD]")}" />
+          </label>
+          <div class="actions">
+            <button id="back-payment" class="secondary" type="button" data-back>Back</button>
+            <button id="submit" type="submit">Submit</button>
+          </div>
+        </fieldset>
         <div id="result" role="status" aria-live="polite"></div>
       </form>
     </main>
     <script>
+      const steps = Array.from(document.querySelectorAll("[data-step]"));
+      const pills = Array.from(document.querySelectorAll("[data-step-pill]"));
+      let currentStep = 0;
+
+      function showStep(index) {
+        currentStep = Math.max(0, Math.min(index, steps.length - 1));
+        steps.forEach((step, stepIndex) => {
+          step.hidden = stepIndex !== currentStep;
+        });
+        pills.forEach((pill, pillIndex) => {
+          pill.dataset.active = String(pillIndex === currentStep);
+        });
+      }
+
+      document.querySelectorAll("[data-next]").forEach((button) => {
+        button.addEventListener("click", () => showStep(currentStep + 1));
+      });
+
+      document.querySelectorAll("[data-back]").forEach((button) => {
+        button.addEventListener("click", () => showStep(currentStep - 1));
+      });
+
       document.querySelector("#safe-form").addEventListener("submit", (event) => {
         event.preventDefault();
         document.querySelector("#result").textContent = "Submitted locally for demo.";

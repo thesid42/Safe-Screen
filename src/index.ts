@@ -5,7 +5,8 @@ import { redactScreenshot } from "./redactor.js";
 import { TzafonClient } from "./tzafonClient.js";
 import type { DOMRectLike, RedactorOutput, SafeScreenAction, SanitizedFormField } from "./types.js";
 
-const GOAL = "Fill the email field with [MY_EMAIL], then submit the form.";
+const DEFAULT_GOAL =
+  "Complete the multi-step form. On Contact, fill full name [MY_NAME] and email [MY_EMAIL], then click Next. On Identity, fill phone [MY_PHONE], SSN [MY_SSN], and address [MY_ADDRESS], then click Next. On Payment, fill credit card [MY_CARD], then submit.";
 
 async function main(): Promise<void> {
   const kernel = new KernelClient();
@@ -20,24 +21,28 @@ async function main(): Promise<void> {
       console.log("Using local Playwright browser fallback because KERNEL_API_KEY is not set.");
     }
 
+    const goal = process.env.SAFE_SCREEN_GOAL?.trim() || DEFAULT_GOAL;
+    console.log(`Goal: ${goal}`);
+
     const viewport = kernel.getViewport();
     let redacted = await captureAndRedactStep(kernel, 1);
 
     const emailBox = await kernel.getElementBox("#email");
     const submitBox = await kernel.getElementBox("#submit");
+    const resultSelector = process.env.SAFE_SCREEN_RESULT_SELECTOR || "#result";
     const tzafon = new TzafonClient({
       viewport: redacted.viewport,
       mockTargets: { emailBox, submitBox }
     });
 
-    const maxSteps = Number.parseInt(process.env.SAFE_SCREEN_MAX_STEPS ?? "3", 10);
+    const maxSteps = Number.parseInt(process.env.SAFE_SCREEN_MAX_STEPS ?? "16", 10);
     let lastModelAction: SafeScreenAction | undefined;
     let lastActionSummary: string | undefined;
     let didDemoPlaceholderType = false;
 
     for (let step = 1; step <= maxSteps; step += 1) {
       let modelAction = await tzafon.nextAction({
-        goal: GOAL,
+        goal,
         redactedScreenshotBase64: redacted.redactedScreenshotBase64,
         redactions: redacted.redactions,
         formState: redacted.formState,
@@ -74,6 +79,14 @@ async function main(): Promise<void> {
       await kernel.executeAction(safeAction);
       await kernel.executeAction({ type: "wait", ms: 500 });
       lastActionSummary = summarizeModelAction(modelAction);
+
+      if (safeAction.type === "click" && submitBox && pointInBox(safeAction.x, safeAction.y, submitBox)) {
+        const resultText = await kernel.getText(resultSelector);
+        if (resultText) {
+          console.log(`Submit completed: ${resultText}`);
+          break;
+        }
+      }
 
       if (step < maxSteps) {
         redacted = await captureAndRedactStep(kernel, step + 1);

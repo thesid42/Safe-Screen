@@ -94,7 +94,7 @@ export class TzafonClient {
       : await responses.create({
           model,
           instructions:
-            "You operate a browser using only redacted screenshots. Use exactly one GUI action per turn. When a target text field is focused, use a type action with the requested placeholder text, for example [MY_EMAIL]. Do not ask to reveal, copy, print, export, or inspect private data.",
+            "You operate a browser using only redacted screenshots. Use exactly one GUI action per turn. When a target text field is focused, type the requested placeholder including brackets, for example [MY_EMAIL], never MY_EMAIL. Do not ask to reveal, copy, print, export, or inspect private data.",
           tools: [tool],
           input: [
             {
@@ -213,12 +213,12 @@ function buildSafeStateText(formState: SanitizedFormField[], lastActionSummary?:
     return `- ${identity}: ${value}${focused}`;
   });
 
-  return [
-    "SafeScreen sanitized page state. Values are placeholders only; never ask for real private values.",
-    lastActionSummary ? `Last executed action: ${lastActionSummary}` : "Last executed action: none.",
-    "Fields:",
-    fields.length ? fields.join("\n") : "- no form fields detected",
-    "Choose the next GUI action. If the email field is focused and empty, type [MY_EMAIL]. If email is filled, move toward submit."
+    return [
+      "SafeScreen sanitized page state. Values are placeholders only; never ask for real private values.",
+      lastActionSummary ? `Last executed action: ${lastActionSummary}` : "Last executed action: none.",
+      "Fields:",
+      fields.length ? fields.join("\n") : "- no form fields detected",
+      "Choose the next GUI action. Fill visible empty fields requested by the current step using placeholders only, including brackets like [MY_EMAIL]. If a target field is focused and empty, type its placeholder. Use Next to move between steps. Submit only on the final step after all requested visible fields are filled."
   ].join("\n");
 }
 

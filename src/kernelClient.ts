@@ -126,6 +126,11 @@ export class KernelClient {
       : undefined;
   }
 
+  async getText(selector: string): Promise<string> {
+    const page = await this.getPage();
+    return page.locator(selector).first().textContent().then((text) => text?.trim() ?? "").catch(() => "");
+  }
+
   async extractSanitizedFormState(): Promise<SanitizedFormField[]> {
     const page = await this.getPage();
     const rawFields = await page.evaluate(`
@@ -243,6 +248,11 @@ function sanitizeValueToPlaceholder(value: string): string | undefined {
 
   for (const [placeholder, realValue] of Object.entries(PLACEHOLDER_VAULT) as Array<[Placeholder, string]>) {
     if (normalized === realValue || normalized.includes(realValue)) {
+      return placeholder;
+    }
+
+    const barePlaceholder = placeholder.slice(1, -1);
+    if (normalized === barePlaceholder || normalized.includes(barePlaceholder)) {
       return placeholder;
     }
   }

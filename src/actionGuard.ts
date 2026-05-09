@@ -4,7 +4,7 @@ import { PLACEHOLDER_VAULT } from "./demoPage.js";
 import type { ActionContext, DOMRectLike, SafeScreenAction } from "./types.js";
 
 const BLOCKED_TEXT_PATTERN = /\b(copy|clipboard|reveal|show|print|export|download|exfiltrate|send|upload)\b/i;
-const PLACEHOLDER_PATTERN = /\[MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD)\]/g;
+const ANY_PLACEHOLDER_PATTERN = /\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD)\]?/g;
 
 export async function guardAction(action: unknown, context: ActionContext): Promise<SafeScreenAction> {
   const normalized = normalizeAction(action);
@@ -112,8 +112,9 @@ function validateClick(action: Extract<SafeScreenAction, { type: "click" }>, con
 }
 
 function replacePlaceholders(text: string): string {
-  return text.replace(PLACEHOLDER_PATTERN, (placeholder) => {
-    const value = PLACEHOLDER_VAULT[placeholder as keyof typeof PLACEHOLDER_VAULT];
+  return text.replace(ANY_PLACEHOLDER_PATTERN, (placeholder) => {
+    const normalizedPlaceholder = placeholder.startsWith("[") ? placeholder : `[${placeholder}]`;
+    const value = PLACEHOLDER_VAULT[normalizedPlaceholder as keyof typeof PLACEHOLDER_VAULT];
     if (!value) {
       throw new Error(`Unknown placeholder: ${placeholder}`);
     }
