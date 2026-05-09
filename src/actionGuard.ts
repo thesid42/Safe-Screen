@@ -41,6 +41,7 @@ export async function guardAction(action: unknown, context: ActionContext): Prom
     if (key.includes("meta+c") || key.includes("control+c") || key.includes("ctrl+c") || key.includes("printscreen")) {
       throw new Error(`Blocked unsafe key action: ${normalized.key}`);
     }
+    validateKeyboardKey(normalized.key);
   }
 
   return normalized;
@@ -165,6 +166,40 @@ function sanitizeLiteralVaultText(text: string): string {
   }
 
   return sanitized;
+}
+
+function validateKeyboardKey(key: string): void {
+  const supportedNamedKeys = new Set([
+    "Enter",
+    "Tab",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Insert",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Shift",
+    "Control",
+    "Alt",
+    "Meta"
+  ]);
+
+  for (const part of key.split("+")) {
+    const segment = part.trim();
+    if (!segment) continue;
+    if (segment.length === 1) continue;
+    if (/^F(?:[1-9]|1[0-2])$/.test(segment)) continue;
+    if (supportedNamedKeys.has(segment)) continue;
+    if (segment === "Ctrl") continue;
+
+    throw new Error(`Blocked unsupported keyboard key from model: ${key}`);
+  }
 }
 
 function pointInBox(x: number, y: number, box: DOMRectLike): boolean {

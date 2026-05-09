@@ -99,6 +99,21 @@ export class TzafonClient {
             }
           ]
         })
+      : shouldAnswerWithoutBrowserTool(params.goal, params.formState)
+        ? await responses.create({
+            model,
+            instructions:
+              "You review a redacted browser screenshot. Answer directly using only visible non-sensitive details. Do not request browser actions. Do not reveal, copy, print, export, or infer private values. If a value is private, refer to its placeholder or category only.",
+            input: [
+              {
+                role: "user",
+                content: [
+                  { type: "input_text", text: `${params.goal}\n\n${safeStateText}` },
+                  { type: "input_image", image_url: imageUrl, detail: "auto" }
+                ]
+              }
+            ]
+          })
       : await responses.create({
           model,
           instructions:
@@ -167,7 +182,7 @@ export class TzafonClient {
 
     if (type === "key" || type === "keypress") {
       const key = Array.isArray(action.keys) ? action.keys.join("+") : action.keys ?? action.key;
-      return { type: "key", key: requireString(key, "key") };
+      return { type: "key", key: normalizeKeyboardKey(requireString(key, "key")) };
     }
 
     if (type === "wait") {
@@ -238,6 +253,38 @@ function buildSafeStateText(formState: SanitizedFormField[], lastActionSummary?:
       fields.length ? fields.join("\n") : "- no form fields detected",
       "Choose the next GUI action only when interaction is needed. Fill visible empty fields requested by the current step using placeholders only, including brackets like [MY_EMAIL] or [MY_PASSWORD]. If a target field is focused and empty, type its placeholder. Use Next to move between steps. Submit only on the final step after all requested visible fields are filled. If the task asks for analysis or the work is complete, answer with the privacy-safe result."
   ].join("\n");
+}
+
+function shouldAnswerWithoutBrowserTool(goal: string, formState: SanitizedFormField[]): boolean {
+  const normalizedGoal = goal.toLowerCase();
+  const actionGoal = normalizedGoal
+    .replace(/\bdo not\b[^.?!]*/g, "")
+    .replace(/\bdon't\b[^.?!]*/g, "");
+  const asksForInteraction = /\b(click|type|fill|complete|submit|login|sign in|press|select|choose|open|download|upload|scroll)\b/.test(actionGoal);
+  const asksForAnswer = /\b(answer|summari[sz]e|summary|analysis|analyze|describe|review|confirm|identify|what is|what's|explain)\b/.test(normalizedGoal);
+  const hasActionableFields = formState.some((field) => field.status === "empty");
+
+  return asksForAnswer && !asksForInteraction && !hasActionableFields;
+}
+
+function normalizeKeyboardKey(key: string): string {
+  const trimmed = key.trim();
+  const lower = trimmed.toLowerCase();
+  const aliases: Record<string, string> = {
+    return: "Enter",
+    esc: "Escape",
+    space: " ",
+    pgdn: "PageDown",
+    pgup: "PageUp",
+    next: "PageDown",
+    prior: "PageUp",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+    up: "ArrowUp",
+    down: "ArrowDown"
+  };
+
+  return aliases[lower] ?? trimmed;
 }
 
 function extractLightconeAnswer(response: Record<string, unknown>, output: unknown[]): string | undefined {
