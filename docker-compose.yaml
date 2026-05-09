@@ -1,0 +1,41 @@
+name: qwen-vl
+
+services:
+  qwen-vl:
+    image: vllm/vllm-openai:latest
+    container_name: qwen-vl
+    restart: unless-stopped
+    ipc: host
+    shm_size: "32g"
+    ports:
+      - "12434:8000"
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ./cache/huggingface:/root/.cache/huggingface
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --model
+      - Qwen/Qwen3-VL-4B-Instruct
+      - --served-model-name
+      - Qwen/Qwen3-VL-4B-Instruct
+      - --dtype
+      - bfloat16
+      - --max-model-len
+      - "32768"
+      - --gpu-memory-utilization
+      - "0.90"
+      - --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
