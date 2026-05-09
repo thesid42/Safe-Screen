@@ -29,6 +29,13 @@ export async function guardAction(action: unknown, context: ActionContext): Prom
     };
   }
 
+  if (normalized.type === "answer") {
+    return {
+      ...normalized,
+      text: sanitizeLiteralVaultText(normalized.text)
+    };
+  }
+
   if (normalized.type === "key") {
     const key = normalized.key.toLowerCase();
     if (key.includes("meta+c") || key.includes("control+c") || key.includes("ctrl+c") || key.includes("printscreen")) {
@@ -92,11 +99,18 @@ function normalizeAction(action: unknown): SafeScreenAction {
     };
   }
 
+  if (type === "answer") {
+    return {
+      type: "answer",
+      text: requireString(candidate.text, "text")
+    };
+  }
+
   throw new Error(`Blocked unsupported action type: ${String(type)}`);
 }
 
 function validateAllowedAction(action: SafeScreenAction): void {
-  if (!["click", "type", "scroll", "key", "wait"].includes(action.type)) {
+  if (!["click", "type", "scroll", "key", "wait", "answer"].includes(action.type)) {
     throw new Error(`Blocked unsupported action type: ${String((action as { type: string }).type)}`);
   }
 }
@@ -139,6 +153,18 @@ function blockLiteralVaultTyping(text: string): void {
       throw new Error(`Blocked model attempt to type literal vault value for ${placeholder}. The model must use placeholders.`);
     }
   }
+}
+
+function sanitizeLiteralVaultText(text: string): string {
+  let sanitized = text;
+
+  for (const [placeholder, value] of Object.entries(getVaultSnapshot())) {
+    if (value) {
+      sanitized = sanitized.replaceAll(value, placeholder);
+    }
+  }
+
+  return sanitized;
 }
 
 function pointInBox(x: number, y: number, box: DOMRectLike): boolean {

@@ -6,7 +6,7 @@ export const DEMO_GOALS: Record<DemoScenario, string> = {
   multistep:
     "Complete the multi-step form. On Contact, fill full name [MY_NAME] and email [MY_EMAIL], then click Next. On Identity, fill phone [MY_PHONE], SSN [MY_SSN], and address [MY_ADDRESS], then click Next. On Payment, fill credit card [MY_CARD], then submit.",
   statement:
-    "Review the account statement using only the redacted screenshot. Do not click Download PDF, do not reveal private values, and do not type anything. Identify whether sensitive account, identity, card, address, phone, and transaction-reference information is covered by sticky-note placeholders. If the page appears adequately redacted, wait.",
+    "You received a redacted input image of an account statement. Make a privacy-safe spend analysis using only the visible non-sensitive details. Summarize deposits, outgoing payments, card payments, insurance payments, and any notable spending patterns. Do not click Download PDF. Do not reveal names, emails, phone numbers, SSNs, addresses, account numbers, card numbers, routing numbers, or transaction references. If a private value is needed, refer to its placeholder or category only. When done, answer with a brief spend analysis.",
   profile:
     "Review the customer profile using only the redacted screenshot. Do not reveal, copy, export, or type private values. Confirm that visible profile details, credentials, support notes, SSN, phone, email, address, card, and reset-token-like values are redacted with placeholders. If the page appears adequately redacted, wait."
 };

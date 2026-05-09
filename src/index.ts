@@ -69,11 +69,19 @@ async function main(): Promise<void> {
       }
       lastModelAction = modelAction;
 
-      console.log(`Step ${step} model action: ${JSON.stringify(modelAction)}`);
       const safeAction = await guardAction(modelAction, {
         viewport: redacted.viewport,
         submitBox
       });
+
+      const modelActionForLog = modelAction.type === "answer" ? safeAction : modelAction;
+      console.log(`Step ${step} model action: ${JSON.stringify(modelActionForLog)}`);
+
+      if (safeAction.type === "answer") {
+        console.log(`Step ${step} CUA answer:\n${safeAction.text}`);
+        lastActionSummary = summarizeModelAction(safeAction);
+        break;
+      }
 
       const actionForLog = safeAction.type === "type"
         ? { ...safeAction, text: safeAction.text.replace(/[^\s]/g, "*") }
@@ -242,6 +250,10 @@ function summarizeModelAction(action: SafeScreenAction): string {
 
   if (action.type === "click") {
     return `Clicked at (${Math.round(action.x)}, ${Math.round(action.y)}).`;
+  }
+
+  if (action.type === "answer") {
+    return "Answered with a privacy-safe result.";
   }
 
   return `Executed ${action.type}.`;

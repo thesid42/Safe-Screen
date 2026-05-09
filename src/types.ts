@@ -3,7 +3,8 @@ export type SafeScreenAction =
   | { type: "type"; text: string }
   | { type: "scroll"; dx?: number; dy: number; x?: number; y?: number }
   | { type: "key"; key: string }
-  | { type: "wait"; ms: number };
+  | { type: "wait"; ms: number }
+  | { type: "answer"; text: string };
 
 export type DOMRectLike = {
   x: number;

@@ -14,6 +14,14 @@ type LightconeComputerCall = {
   action?: Record<string, unknown>;
 };
 
+type LightconeOutputItem = {
+  type?: string;
+  call_id?: string;
+  action?: Record<string, unknown>;
+  content?: unknown;
+  summary?: unknown;
+};
+
 export class TzafonClient {
   private previousResponseId?: string;
   private previousCallId?: string;
@@ -50,7 +58,7 @@ export class TzafonClient {
     lastActionSummary?: string;
   }): Promise<SafeScreenAction | undefined> {
     const { default: Lightcone } = await import("@tzafon/lightcone");
-    const model = process.env.TZAFON_MODEL?.trim() || "tzafon.northstar-cua-fast";
+    const model = requireEnv("TZAFON_MODEL");
     const client = new Lightcone({
       apiKey: process.env.TZAFON_API_KEY,
       baseURL: process.env.LIGHTCONE_BASE_URL || undefined
@@ -94,7 +102,7 @@ export class TzafonClient {
       : await responses.create({
           model,
           instructions:
-            "You operate a browser using only redacted screenshots. Use exactly one GUI action per turn. When a target text field is focused, type the requested placeholder including brackets, for example [MY_EMAIL] or [MY_PASSWORD], never literal credentials. Do not ask to reveal, copy, print, export, or inspect private data.",
+            "You operate a browser using only redacted screenshots. Use at most one GUI action per turn when interaction is needed. If the task is complete or asks for a summary, analysis, or final response, answer directly instead of taking a GUI action. When a target text field is focused, type the requested placeholder including brackets, for example [MY_EMAIL] or [MY_PASSWORD], never literal credentials. Do not ask to reveal, copy, print, export, or inspect private data.",
           tools: [tool],
           input: [
             {
@@ -110,11 +118,16 @@ export class TzafonClient {
     this.previousResponseId = typeof response.id === "string" ? response.id : undefined;
 
     const output = Array.isArray(response.output) ? response.output : [];
+    const answerText = extractLightconeAnswer(response, output);
     const computerCall = output.find((item): item is LightconeComputerCall => {
       return Boolean(item && typeof item === "object" && (item as LightconeComputerCall).type === "computer_call");
     });
 
     if (!computerCall?.action) {
+      if (answerText) {
+        return { type: "answer", text: answerText };
+      }
+
       return undefined;
     }
 
@@ -159,6 +172,11 @@ export class TzafonClient {
 
     if (type === "wait") {
       return { type: "wait", ms: 1000 };
+    }
+
+    if (type === "answer" || type === "done" || type === "final" || type === "respond") {
+      const text = action.text ?? action.answer ?? action.result ?? action.message ?? "Done.";
+      return { type: "answer", text: requireString(text, "text") };
     }
 
     throw new Error(`Unsupported Northstar action type: ${String(type)}`);
@@ -218,8 +236,61 @@ function buildSafeStateText(formState: SanitizedFormField[], lastActionSummary?:
       lastActionSummary ? `Last executed action: ${lastActionSummary}` : "Last executed action: none.",
       "Fields:",
       fields.length ? fields.join("\n") : "- no form fields detected",
-      "Choose the next GUI action. Fill visible empty fields requested by the current step using placeholders only, including brackets like [MY_EMAIL] or [MY_PASSWORD]. If a target field is focused and empty, type its placeholder. Use Next to move between steps. Submit only on the final step after all requested visible fields are filled."
+      "Choose the next GUI action only when interaction is needed. Fill visible empty fields requested by the current step using placeholders only, including brackets like [MY_EMAIL] or [MY_PASSWORD]. If a target field is focused and empty, type its placeholder. Use Next to move between steps. Submit only on the final step after all requested visible fields are filled. If the task asks for analysis or the work is complete, answer with the privacy-safe result."
   ].join("\n");
+}
+
+function extractLightconeAnswer(response: Record<string, unknown>, output: unknown[]): string | undefined {
+  const directText = typeof response.output_text === "string" ? response.output_text.trim() : "";
+  if (directText) {
+    return directText;
+  }
+
+  const chunks: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const outputItem = item as LightconeOutputItem;
+    if (outputItem.type === "message" || outputItem.type === "reasoning") {
+      chunks.push(...extractContentText(outputItem.content));
+      chunks.push(...extractContentText(outputItem.summary));
+    }
+  }
+
+  const answer = chunks.map((chunk) => chunk.trim()).filter(Boolean).join("\n\n");
+  return answer || undefined;
+}
+
+function extractContentText(content: unknown): string[] {
+  if (!content) {
+    return [];
+  }
+
+  if (typeof content === "string") {
+    return [content];
+  }
+
+  if (Array.isArray(content)) {
+    return content.flatMap((item) => extractContentText(item));
+  }
+
+  if (typeof content === "object") {
+    const record = content as Record<string, unknown>;
+    const text = record.text ?? record.output_text;
+    if (typeof text === "string") {
+      return [text];
+    }
+  }
+
+  return [];
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} is required.`);
+  }
+
+  return value;
 }
 
 function requireNumber(value: unknown, field: string): number {

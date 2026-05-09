@@ -213,6 +213,8 @@ export class KernelClient {
       case "wait":
         await page.waitForTimeout(action.ms);
         return;
+      case "answer":
+        return;
     }
   }
 
