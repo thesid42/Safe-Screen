@@ -76,6 +76,7 @@ async function main(): Promise<void> {
         : safeAction;
       console.log(`Step ${step} guarded local action: ${JSON.stringify(actionForLog)}`);
 
+      await focusFieldForTypeIfNeeded(kernel, modelAction, redacted.formState);
       await kernel.executeAction(safeAction);
       await kernel.executeAction({ type: "wait", ms: 500 });
       lastActionSummary = summarizeModelAction(modelAction);
@@ -147,6 +148,54 @@ function applyDemoProgressOverride(
 
 function pointInBox(x: number, y: number, box: DOMRectLike): boolean {
   return x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+}
+
+async function focusFieldForTypeIfNeeded(
+  kernel: KernelClient,
+  action: SafeScreenAction,
+  formState: SanitizedFormField[]
+): Promise<void> {
+  if (action.type !== "type") return;
+
+  const placeholder = extractPlaceholder(action.text);
+  if (!placeholder) return;
+
+  const field = formState.find((candidate) => {
+    return (
+      candidate.status === "empty" &&
+      fieldPlaceholder(candidate) === placeholder
+    );
+  });
+
+  if (!field || field.focused) return;
+
+  console.warn(`SafeScreen focusing ${field.label} before typing ${placeholder}.`);
+  await kernel.executeAction({
+    type: "click",
+    x: Math.round(field.box.x + field.box.width / 2),
+    y: Math.round(field.box.y + field.box.height / 2),
+    button: "left"
+  });
+  await kernel.executeAction({ type: "wait", ms: 150 });
+}
+
+function extractPlaceholder(text: string): string | undefined {
+  const match = text.match(/\[?MY_(?:NAME|EMAIL|PHONE|SSN|ADDRESS|CARD)\]?/);
+  if (!match) return undefined;
+  return match[0].startsWith("[") ? match[0] : `[${match[0]}]`;
+}
+
+function fieldPlaceholder(field: SanitizedFormField): string | undefined {
+  const identity = `${field.label} ${field.name ?? ""} ${field.id ?? ""} ${field.type ?? ""}`.toLowerCase();
+
+  if (/\b(email|e-mail)\b/.test(identity)) return "[MY_EMAIL]";
+  if (/\b(full name|name)\b/.test(identity)) return "[MY_NAME]";
+  if (/\b(phone|tel)\b/.test(identity)) return "[MY_PHONE]";
+  if (/\b(ssn|social security)\b/.test(identity)) return "[MY_SSN]";
+  if (/\b(address|street)\b/.test(identity)) return "[MY_ADDRESS]";
+  if (/\b(credit card|card|cc-number)\b/.test(identity)) return "[MY_CARD]";
+
+  return undefined;
 }
 
 main().catch((error) => {

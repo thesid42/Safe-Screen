@@ -6,7 +6,7 @@ import type { DOMRectLike, Redaction, RedactorOutput, Viewport, VisibleDomText }
 
 const PLACEHOLDERS = Object.keys(PLACEHOLDER_VAULT) as Placeholder[];
 const DEFAULT_REDACTION_POLICY =
-  "Redact direct PII, credentials, financial data, health data, government IDs, private notes, and any field that could identify or expose a person.";
+  "Redact only visible sensitive values, not labels or empty fields. Redact direct PII, credentials, financial data, health data, government IDs, and private notes when the sensitive value is visible.";
 
 export async function redactScreenshot(
   screenshotPath: string,
@@ -44,9 +44,7 @@ async function detectRedactions(
 ): Promise<Redaction[]> {
   const mode = getRedactorMode();
   const fallbackEnabled = process.env.SAFE_SCREEN_REDACTOR_FALLBACK !== "false";
-  const ruleRedactions = mode === "rules" || mode === "hybrid"
-    ? collectRuleRedactions(domText, viewport)
-    : [];
+  const ruleRedactions = collectRuleRedactions(domText, viewport);
 
   if (mode === "rules") {
     console.log("SafeScreen redactor: using local rule-based detector.");
@@ -66,7 +64,7 @@ async function detectRedactions(
     const brevRedactions = await collectBrevRedactions(screenshotPath, domText, viewport);
     console.log(`SafeScreen redactor: Brev returned ${brevRedactions.length} redaction(s).`);
 
-    if (mode === "hybrid") {
+    if (mode === "hybrid" || process.env.SAFE_SCREEN_RULE_VALUE_FALLBACK !== "false") {
       return dedupeRedactions([...brevRedactions, ...ruleRedactions]);
     }
 
@@ -159,7 +157,7 @@ async function collectBrevRedactions(
 
     const payload = await response.json() as unknown;
     const redactionPayload = api === "vllm-chat" ? parseVllmChatRedactionPayload(payload) : payload;
-    return parseBrevRedactions(redactionPayload, domText, viewport);
+    return filterEmptyFieldRedactions(parseBrevRedactions(redactionPayload, domText, viewport));
   } finally {
     clearTimeout(timeout);
   }
@@ -245,7 +243,7 @@ function buildVllmChatBody(rawScreenshotBase64: string, domText: VisibleDomText[
               `Viewport: ${JSON.stringify(viewport)}\n` +
               "Return JSON in this exact shape: {\"redactions\":[{\"placeholder\":\"[MY_EMAIL]\",\"category\":\"email\",\"confidence\":0.98,\"box\":{\"x\":0,\"y\":0,\"width\":10,\"height\":10},\"domId\":\"optional\"}]}.\n" +
               "Use placeholders [MY_NAME], [MY_EMAIL], [MY_PHONE], [MY_SSN], [MY_ADDRESS], [MY_CARD], or [PRIVATE_INFO].\n" +
-              "Prefer the provided DOM boxes when a DOM item text is sensitive. DOM items:\n" +
+              "Do not redact field labels, legends, button text, or empty input boxes. If the visible field is empty, return no redaction for it. Prefer the provided DOM boxes only when a DOM item text contains a sensitive value. DOM items:\n" +
               JSON.stringify(compactDomText)
           },
           {
@@ -381,13 +379,19 @@ function findSourceDomText(raw: Record<string, unknown>, domText: VisibleDomText
   const id = readString(raw.domId) ?? readString(raw.dom_id) ?? readString(raw.id);
   const name = readString(raw.name);
   const text = readString(raw.text) ?? readString(raw.value);
+  const box = readBox(raw.box) ?? readBox(raw.bounding_box) ?? readBox(raw.bbox);
 
-  return domText.find((item) => {
+  const exactMatch = domText.find((item) => {
     if (id && item.id === id) return true;
     if (name && item.name === name) return true;
     if (text && item.text === text) return true;
     return false;
   });
+
+  if (exactMatch) return exactMatch;
+  if (!box) return undefined;
+
+  return domText.find((item) => boxesOverlap(box, item.box, 0.45));
 }
 
 function readBox(value: unknown): DOMRectLike | undefined {
@@ -473,6 +477,38 @@ function dedupeRedactions(redactions: Redaction[]): Redaction[] {
   }
 
   return deduped;
+}
+
+function filterEmptyFieldRedactions(redactions: Redaction[]): Redaction[] {
+  if (process.env.SAFE_SCREEN_REDACT_EMPTY_FIELDS === "true") {
+    return redactions;
+  }
+
+  return redactions.filter((redaction) => {
+    const sourceText = redaction.source.text.trim();
+    if (detectPlaceholder(sourceText)) return true;
+    if (looksLikeSensitiveValue(sourceText)) return true;
+    if (!sourceText) return false;
+    return !looksLikeSensitiveFieldLabel(sourceText);
+  });
+}
+
+function looksLikeSensitiveFieldLabel(text: string): boolean {
+  return /^(full name|name|email|phone|ssn|social security|address|credit card|card)$/i.test(text.trim());
+}
+
+function looksLikeSensitiveValue(text: string): boolean {
+  return Boolean(detectPlaceholder(text));
+}
+
+function boxesOverlap(a: DOMRectLike, b: DOMRectLike, threshold: number): boolean {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.width, b.x + b.width);
+  const y2 = Math.min(a.y + a.height, b.y + b.height);
+  const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const smallerArea = Math.min(a.width * a.height, b.width * b.height);
+  return smallerArea > 0 && intersection / smallerArea >= threshold;
 }
 
 function placeholderToCategory(placeholder: Placeholder): string {
