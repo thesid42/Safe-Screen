@@ -21,7 +21,7 @@ export class KernelClient {
     private readonly headless = process.env.SAFE_SCREEN_HEADLESS === "true"
   ) {}
 
-  async start(): Promise<void> {
+  async start(targetUrl?: string): Promise<void> {
     if (process.env.KERNEL_API_KEY) {
       await this.startKernelBrowser();
     } else {
@@ -30,7 +30,13 @@ export class KernelClient {
 
     const page = await this.getPage();
     await page.setViewportSize(this.viewport);
-    await page.setContent(createDemoPageHtml(), { waitUntil: "domcontentloaded" });
+
+    if (targetUrl) {
+      await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    } else {
+      await page.setContent(createDemoPageHtml(), { waitUntil: "domcontentloaded" });
+    }
+
     await page.waitForLoadState("networkidle").catch(() => undefined);
   }
 

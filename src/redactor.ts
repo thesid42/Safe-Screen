@@ -56,7 +56,7 @@ async function detectRedactions(
       throw new Error("BREV_REDACTOR_URL is required when SAFE_SCREEN_REDACTOR_MODE is not 'rules'.");
     }
 
-    console.warn("BREV_REDACTOR_URL is not set; using local rule-based detector.");
+    warnBrevFallback("BREV_REDACTOR_URL is not set.");
     return collectRuleRedactions(domText, viewport);
   }
 
@@ -74,9 +74,19 @@ async function detectRedactions(
       throw error;
     }
 
-    console.warn(`Brev redactor failed; using local rule-based detector. ${(error as Error).message}`);
+    warnBrevFallback((error as Error).message);
     return collectRuleRedactions(domText, viewport);
   }
+}
+
+function warnBrevFallback(reason: string): void {
+  const line = "!".repeat(88);
+  console.warn(`\n${line}`);
+  console.warn("!!! BREV REDACTOR FAILED - FALLING BACK TO LOCAL RULE-BASED REDACTION !!!");
+  console.warn(`!!! Reason: ${reason}`);
+  console.warn("!!! Raw screenshots are NOT being sent to Brev for this step.");
+  console.warn("!!! Only regex/DOM rule redactions will be applied before Lightcone/Northstar.");
+  console.warn(`${line}\n`);
 }
 
 function getRedactorMode(): "rules" | "brev" | "hybrid" {

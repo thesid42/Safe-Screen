@@ -12,7 +12,8 @@ async function main(): Promise<void> {
   const kernel = new KernelClient();
 
   try {
-    await kernel.start();
+    const targetUrl = process.env.SAFE_SCREEN_TARGET_URL?.trim();
+    await kernel.start(targetUrl || undefined);
 
     const liveViewUrl = kernel.getLiveViewUrl();
     if (liveViewUrl) {
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
     } else {
       console.log("Using local Playwright browser fallback because KERNEL_API_KEY is not set.");
     }
+    console.log(targetUrl ? `Loaded target URL: ${targetUrl}` : "Loaded built-in SafeScreen demo page.");
 
     const goal = process.env.SAFE_SCREEN_GOAL?.trim() || DEFAULT_GOAL;
     console.log(`Goal: ${goal}`);
@@ -27,8 +29,10 @@ async function main(): Promise<void> {
     const viewport = kernel.getViewport();
     let redacted = await captureAndRedactStep(kernel, 1);
 
-    const emailBox = await kernel.getElementBox("#email");
-    const submitBox = await kernel.getElementBox("#submit");
+    const emailSelector = process.env.SAFE_SCREEN_EMAIL_SELECTOR || "#email";
+    const submitSelector = process.env.SAFE_SCREEN_SUBMIT_SELECTOR || "#submit";
+    const emailBox = await kernel.getElementBox(emailSelector);
+    const submitBox = await kernel.getElementBox(submitSelector);
     const resultSelector = process.env.SAFE_SCREEN_RESULT_SELECTOR || "#result";
     const tzafon = new TzafonClient({
       viewport: redacted.viewport,
