@@ -27,7 +27,9 @@ async function main(): Promise<void> {
     const domText = await kernel.extractVisibleDomText();
     const redacted = await redactScreenshot(RAW_SCREENSHOT_PATH, domText, viewport);
     console.log(`Redacted screenshot saved: ${redacted.redactedScreenshotPath}`);
-    console.log(`Redactions applied: ${redacted.redactions.map((item) => item.placeholder).join(", ")}`);
+    console.log(`Redactions applied: ${redacted.redactions.map((item) => {
+      return `${item.placeholder}${item.detector ? `/${item.detector}` : ""}`;
+    }).join(", ")}`);
 
     const emailBox = await kernel.getElementBox("#email");
     const submitBox = await kernel.getElementBox("#submit");

@@ -31,6 +31,9 @@ export type Redaction = {
   value: string;
   box: DOMRectLike;
   source: VisibleDomText;
+  category?: string;
+  confidence?: number;
+  detector?: "rules" | "brev";
 };
 
 export type RedactorOutput = {

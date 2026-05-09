@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { PLACEHOLDER_VAULT, type Placeholder } from "./demoPage.js";
-import type { Redaction, RedactorOutput, Viewport, VisibleDomText } from "./types.js";
+import type { DOMRectLike, Redaction, RedactorOutput, Viewport, VisibleDomText } from "./types.js";
 
 const PLACEHOLDERS = Object.keys(PLACEHOLDER_VAULT) as Placeholder[];
+const DEFAULT_REDACTION_POLICY =
+  "Redact direct PII, credentials, financial data, health data, government IDs, private notes, and any field that could identify or expose a person.";
 
 export async function redactScreenshot(
   screenshotPath: string,
@@ -15,7 +17,8 @@ export async function redactScreenshot(
   const metadata = await sharp(screenshotPath).metadata();
   const width = metadata.width ?? viewport.width;
   const height = metadata.height ?? viewport.height;
-  const redactions = collectRedactions(domText);
+  const imageViewport = { width, height };
+  const redactions = await detectRedactions(screenshotPath, domText, imageViewport);
   const overlaySvg = buildOverlaySvg(redactions, width, height);
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
@@ -29,12 +32,65 @@ export async function redactScreenshot(
   return {
     redactedScreenshotPath: outputPath,
     redactedScreenshotBase64,
-    viewport: { width, height },
+    viewport: imageViewport,
     redactions
   };
 }
 
-function collectRedactions(domText: VisibleDomText[]): Redaction[] {
+async function detectRedactions(
+  screenshotPath: string,
+  domText: VisibleDomText[],
+  viewport: Viewport
+): Promise<Redaction[]> {
+  const mode = getRedactorMode();
+  const fallbackEnabled = process.env.SAFE_SCREEN_REDACTOR_FALLBACK !== "false";
+  const ruleRedactions = mode === "rules" || mode === "hybrid"
+    ? collectRuleRedactions(domText, viewport)
+    : [];
+
+  if (mode === "rules") {
+    console.log("SafeScreen redactor: using local rule-based detector.");
+    return ruleRedactions;
+  }
+
+  if (!process.env.BREV_REDACTOR_URL) {
+    if (!fallbackEnabled) {
+      throw new Error("BREV_REDACTOR_URL is required when SAFE_SCREEN_REDACTOR_MODE is not 'rules'.");
+    }
+
+    console.warn("BREV_REDACTOR_URL is not set; using local rule-based detector.");
+    return collectRuleRedactions(domText, viewport);
+  }
+
+  try {
+    const brevRedactions = await collectBrevRedactions(screenshotPath, domText, viewport);
+    console.log(`SafeScreen redactor: Brev returned ${brevRedactions.length} redaction(s).`);
+
+    if (mode === "hybrid") {
+      return dedupeRedactions([...brevRedactions, ...ruleRedactions]);
+    }
+
+    return brevRedactions;
+  } catch (error) {
+    if (!fallbackEnabled) {
+      throw error;
+    }
+
+    console.warn(`Brev redactor failed; using local rule-based detector. ${(error as Error).message}`);
+    return collectRuleRedactions(domText, viewport);
+  }
+}
+
+function getRedactorMode(): "rules" | "brev" | "hybrid" {
+  const configured = process.env.SAFE_SCREEN_REDACTOR_MODE?.trim().toLowerCase();
+  if (configured === "rules" || configured === "brev" || configured === "hybrid") {
+    return configured;
+  }
+
+  return process.env.BREV_REDACTOR_URL ? "brev" : "rules";
+}
+
+function collectRuleRedactions(domText: VisibleDomText[], viewport: Viewport): Redaction[] {
   const redactions: Redaction[] = [];
   const seen = new Set<string>();
 
@@ -49,12 +105,177 @@ function collectRedactions(domText: VisibleDomText[]): Redaction[] {
     redactions.push({
       placeholder,
       value: PLACEHOLDER_VAULT[placeholder],
-      box: padBox(item.box, 6),
-      source: item
+      box: padAndClampBox(item.box, 6, viewport),
+      source: item,
+      category: placeholderToCategory(placeholder),
+      confidence: 1,
+      detector: "rules"
     });
   }
 
   return redactions;
+}
+
+async function collectBrevRedactions(
+  screenshotPath: string,
+  domText: VisibleDomText[],
+  viewport: Viewport
+): Promise<Redaction[]> {
+  const endpoint = buildBrevRedactorEndpoint(process.env.BREV_REDACTOR_URL);
+  const rawScreenshotBase64 = await fs.readFile(screenshotPath, "base64");
+  const timeoutMs = Number.parseInt(process.env.BREV_REDACTOR_TIMEOUT_MS ?? "30000", 10);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...buildBrevAuthHeaders()
+      },
+      body: JSON.stringify({
+        model: requireEnv("BREV_REDACTOR_MODEL"),
+        policy: process.env.SAFE_SCREEN_REDACTION_POLICY || DEFAULT_REDACTION_POLICY,
+        screenshot_base64: rawScreenshotBase64,
+        viewport,
+        dom_text: domText
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Brev redactor returned ${response.status}: ${body.slice(0, 240)}`);
+    }
+
+    const payload = await response.json() as unknown;
+    return parseBrevRedactions(payload, domText, viewport);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildBrevRedactorEndpoint(baseUrl: string | undefined): string {
+  if (!baseUrl) {
+    throw new Error("BREV_REDACTOR_URL is not set.");
+  }
+
+  const url = new URL(baseUrl);
+  if (url.pathname === "/" || url.pathname === "") {
+    url.pathname = "/redact";
+  }
+
+  return url.toString();
+}
+
+function buildBrevAuthHeaders(): Record<string, string> {
+  const token = process.env.BREV_REDACTOR_TOKEN?.trim();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+function parseBrevRedactions(
+  payload: unknown,
+  domText: VisibleDomText[],
+  viewport: Viewport
+): Redaction[] {
+  const candidate = payload as { redactions?: unknown; items?: unknown };
+  const items = Array.isArray(candidate.redactions)
+    ? candidate.redactions
+    : Array.isArray(candidate.items)
+      ? candidate.items
+      : Array.isArray(payload)
+        ? payload
+        : undefined;
+
+  if (!items) {
+    throw new Error("Brev redactor response must contain a redactions array.");
+  }
+
+  return dedupeRedactions(items.flatMap((item) => normalizeBrevRedaction(item, domText, viewport)));
+}
+
+function normalizeBrevRedaction(
+  item: unknown,
+  domText: VisibleDomText[],
+  viewport: Viewport
+): Redaction[] {
+  if (!item || typeof item !== "object") return [];
+
+  const raw = item as Record<string, unknown>;
+  const source = findSourceDomText(raw, domText);
+  const box = readBox(raw.box) ?? readBox(raw.bounding_box) ?? readBox(raw.bbox) ?? source?.box;
+  if (!box) return [];
+
+  const category = readString(raw.category) ?? readString(raw.type) ?? "sensitive";
+  const placeholder = normalizePlaceholder(readString(raw.placeholder), category);
+  const confidence = readNumber(raw.confidence);
+
+  return [{
+    placeholder,
+    value: placeholder in PLACEHOLDER_VAULT
+      ? PLACEHOLDER_VAULT[placeholder as Placeholder]
+      : source?.text ?? "",
+    box: padAndClampBox(box, 6, viewport),
+    source: source ?? {
+      text: readString(raw.text) ?? "",
+      box,
+      tagName: "vision"
+    },
+    category,
+    confidence,
+    detector: "brev"
+  }];
+}
+
+function findSourceDomText(raw: Record<string, unknown>, domText: VisibleDomText[]): VisibleDomText | undefined {
+  const id = readString(raw.domId) ?? readString(raw.dom_id) ?? readString(raw.id);
+  const name = readString(raw.name);
+  const text = readString(raw.text) ?? readString(raw.value);
+
+  return domText.find((item) => {
+    if (id && item.id === id) return true;
+    if (name && item.name === name) return true;
+    if (text && item.text === text) return true;
+    return false;
+  });
+}
+
+function readBox(value: unknown): DOMRectLike | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const box = value as Record<string, unknown>;
+  const x = readNumber(box.x ?? box.left);
+  const y = readNumber(box.y ?? box.top);
+  const width = readNumber(box.width ?? box.w);
+  const height = readNumber(box.height ?? box.h);
+
+  if (x === undefined || y === undefined || width === undefined || height === undefined) {
+    return undefined;
+  }
+
+  return { x, y, width, height };
+}
+
+function normalizePlaceholder(rawPlaceholder: string | undefined, category: string): string {
+  if (rawPlaceholder && /^\[[A-Z0-9_]+\]$/.test(rawPlaceholder)) {
+    return rawPlaceholder;
+  }
+
+  const normalizedCategory = category.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const categoryMap: Record<string, string> = {
+    address: "[MY_ADDRESS]",
+    card: "[MY_CARD]",
+    credit_card: "[MY_CARD]",
+    email: "[MY_EMAIL]",
+    name: "[MY_NAME]",
+    person_name: "[MY_NAME]",
+    phone: "[MY_PHONE]",
+    ssn: "[MY_SSN]",
+    social_security: "[MY_SSN]",
+    social_security_number: "[MY_SSN]"
+  };
+
+  return categoryMap[normalizedCategory] ?? `[PRIVATE_${normalizedCategory.toUpperCase() || "INFO"}]`;
 }
 
 function detectPlaceholder(text: string): Placeholder | undefined {
@@ -77,13 +298,56 @@ function detectPlaceholder(text: string): Placeholder | undefined {
   return undefined;
 }
 
-function padBox(box: Redaction["box"], padding: number): Redaction["box"] {
+function padAndClampBox(box: Redaction["box"], padding: number, viewport: Viewport): Redaction["box"] {
+  const x = Math.max(0, box.x - padding);
+  const y = Math.max(0, box.y - padding);
+  const right = Math.min(viewport.width, box.x + box.width + padding);
+  const bottom = Math.min(viewport.height, box.y + box.height + padding);
+
   return {
-    x: Math.max(0, box.x - padding),
-    y: Math.max(0, box.y - padding),
-    width: box.width + padding * 2,
-    height: box.height + padding * 2
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y)
   };
+}
+
+function dedupeRedactions(redactions: Redaction[]): Redaction[] {
+  const seen = new Set<string>();
+  const deduped: Redaction[] = [];
+
+  for (const redaction of redactions) {
+    const key = `${redaction.placeholder}:${Math.round(redaction.box.x)}:${Math.round(redaction.box.y)}:${Math.round(redaction.box.width)}:${Math.round(redaction.box.height)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(redaction);
+  }
+
+  return deduped;
+}
+
+function placeholderToCategory(placeholder: Placeholder): string {
+  return placeholder
+    .replace("[MY_", "")
+    .replace("]", "")
+    .toLowerCase();
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} must be set when using the Brev redactor.`);
+  }
+
+  return value;
 }
 
 function buildOverlaySvg(redactions: Redaction[], width: number, height: number): string {

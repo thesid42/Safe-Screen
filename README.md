@@ -44,9 +44,12 @@ Kernel browser screenshot
   -> Kernel browser execution
 ```
 
-For the 4-hour MVP, redaction is DOM-assisted rather than OCR-based. Playwright reads visible DOM text and bounding boxes from the browser, then `sharp` draws sticky-note overlays onto the screenshot while preserving the original dimensions and coordinate space.
+For the 4-hour MVP, redaction can run in two modes:
 
-Brev is not needed for the MVP. It is a future option if redaction moves from DOM-assisted detection to heavier OCR or vision models.
+- local rule-based detection, where Playwright reads visible DOM text and bounding boxes, then `sharp` draws sticky-note overlays onto the screenshot while preserving the original dimensions and coordinate space
+- Brev-hosted smart detection, where SafeScreen sends the raw local screenshot plus DOM metadata to a trusted Qwen VL redaction service and receives back redaction boxes/labels before anything is sent to the CUA model
+
+The Brev redactor is inside the privacy boundary. Lightcone/Northstar still receives only the redacted screenshot.
 
 ## Setup
 
@@ -60,11 +63,65 @@ Set these values if you want cloud integrations:
 ```bash
 KERNEL_API_KEY=...
 TZAFON_API_KEY=...
+TZAFON_MODEL=...
 LIGHTCONE_BASE_URL=
 TZAFON_MOCK_FALLBACK=true
+SAFE_SCREEN_REDACTOR_MODE=brev
+BREV_REDACTOR_URL=
+BREV_REDACTOR_TOKEN=
+BREV_REDACTOR_MODEL=...
 ```
 
 If `KERNEL_API_KEY` is missing, SafeScreen uses a local Playwright Chromium browser. If `TZAFON_API_KEY` is missing or the Lightcone request fails and `TZAFON_MOCK_FALLBACK=true`, it uses the mock action sequence.
+
+If `BREV_REDACTOR_URL` is set, SafeScreen calls that service for smart redaction. If it is missing or unavailable and `SAFE_SCREEN_REDACTOR_FALLBACK=true`, SafeScreen falls back to local rule-based redaction.
+
+## Brev Redactor Contract
+
+SafeScreen expects the Brev instance to expose:
+
+```text
+POST /redact
+```
+
+Request:
+
+```json
+{
+  "model": "<value of BREV_REDACTOR_MODEL>",
+  "policy": "Redact direct PII, credentials, financial data, health data, government IDs, private notes, and any field that could identify or expose a person.",
+  "screenshot_base64": "...",
+  "viewport": { "width": 1280, "height": 800 },
+  "dom_text": [
+    {
+      "text": "anmol@example.com",
+      "box": { "x": 420, "y": 260, "width": 320, "height": 44 },
+      "tagName": "input",
+      "id": "email",
+      "name": "email",
+      "type": "email"
+    }
+  ]
+}
+```
+
+Response can be either `{ "redactions": [...] }`, `{ "items": [...] }`, or a raw array:
+
+```json
+{
+  "redactions": [
+    {
+      "placeholder": "[MY_EMAIL]",
+      "category": "email",
+      "confidence": 0.98,
+      "box": { "x": 420, "y": 260, "width": 320, "height": 44 },
+      "domId": "email"
+    }
+  ]
+}
+```
+
+If the service returns `domId`, `dom_id`, `id`, `name`, or exact `text`, SafeScreen can reuse the matching DOM box. If it returns `box`, `bounding_box`, or `bbox`, SafeScreen uses that box directly.
 
 ## Run
 

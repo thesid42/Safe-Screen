@@ -46,6 +46,7 @@ export class TzafonClient {
     redactedScreenshotBase64: string;
   }): Promise<SafeScreenAction | undefined> {
     const { default: Lightcone } = await import("@tzafon/lightcone");
+    const model = requireEnv("TZAFON_MODEL");
     const client = new Lightcone({
       apiKey: process.env.TZAFON_API_KEY,
       baseURL: process.env.LIGHTCONE_BASE_URL || undefined
@@ -67,7 +68,7 @@ export class TzafonClient {
 
     const response = this.previousResponseId && this.previousCallId
       ? await responses.create({
-          model: "tzafon.northstar-cua-fast",
+          model,
           previous_response_id: this.previousResponseId,
           tools: [tool],
           input: [
@@ -79,7 +80,7 @@ export class TzafonClient {
           ]
         })
       : await responses.create({
-          model: "tzafon.northstar-cua-fast",
+          model,
           instructions:
             "You operate a browser using only redacted screenshots. Use placeholders like [MY_EMAIL] when typing sensitive values. Do not ask to reveal, copy, print, or export private data.",
           tools: [tool],
@@ -207,5 +208,14 @@ function requireString(value: unknown, field: string): string {
   if (typeof value !== "string") {
     throw new Error(`Action field '${field}' must be a string.`);
   }
+  return value;
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} must be set when using Lightcone/Northstar.`);
+  }
+
   return value;
 }
