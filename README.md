@@ -1,8 +1,10 @@
 # SafeScreen
 
-SafeScreen is like putting sticky notes over sensitive information before an AI assistant looks at your screen.
+SafeScreen is a privacy layer for browser-using AI agents: it captures local screenshots, redacts sensitive data with placeholders, and sends only the redacted view to the cloud CUA model.
 
-The local controller can see private demo values such as an email, phone number, SSN, address, and credit card. Before the CUA model receives an image, SafeScreen draws sticky-note labels over those values:
+The agent can still complete browser tasks or produce analysis, while real private values stay local and are only used at guarded execution time.
+
+Before the CUA model receives an image, SafeScreen draws sticky-note labels over private values such as:
 
 - `[MY_NAME]`
 - `[MY_EMAIL]`
@@ -11,7 +13,7 @@ The local controller can see private demo values such as an email, phone number,
 - `[MY_ADDRESS]`
 - `[MY_CARD]`
 
-The AI still sees the page layout, labels, fields, and buttons, so it can decide where to click and what to type. If the AI says to type `[MY_EMAIL]`, the local SafeScreen executor swaps that placeholder for the real value immediately before typing into the browser.
+The AI still sees the page layout, labels, fields, buttons, tables, and non-sensitive context. If the AI says to type `[MY_EMAIL]`, the local SafeScreen executor swaps that placeholder for the real value immediately before typing into the browser. If the task is read-only, the CUA can answer directly from the redacted screenshot without receiving private values.
 
 ## Security Rule
 
@@ -30,7 +32,7 @@ It should only receive:
 - redacted screenshots
 - safe placeholder labels
 
-This MVP keeps the placeholder vault in `src/demoPage.ts` and never includes it in Lightcone requests.
+The placeholder vault is local-only and never included in Lightcone/Northstar requests.
 
 ## Architecture
 
@@ -38,18 +40,20 @@ This MVP keeps the placeholder vault in `src/demoPage.ts` and never includes it 
 Kernel browser screenshot
   -> local DOM-assisted SafeScreen redactor
   -> redacted screenshot with sticky-note labels
-  -> Lightcone / Northstar CUA or mock Tzafon client
+  -> Lightcone / Northstar CUA or mock client
   -> SafeScreen action guard
-  -> local placeholder substitution
-  -> Kernel browser execution
+  -> local placeholder substitution or privacy-safe answer logging
+  -> Kernel/local browser execution when an action is needed
 ```
 
-For the 4-hour MVP, redaction can run in two modes:
+Redaction can run in two modes:
 
 - local rule-based detection, where Playwright reads visible DOM text and bounding boxes, then `sharp` draws sticky-note overlays onto the screenshot while preserving the original dimensions and coordinate space
 - Brev-hosted smart detection, where SafeScreen sends the raw local screenshot plus DOM metadata to a trusted Qwen VL redaction service and receives back redaction boxes/labels before anything is sent to the CUA model
 
 The Brev redactor is inside the privacy boundary. Lightcone/Northstar still receives only the redacted screenshot.
+
+CUA responses can be browser actions (`click`, `type`, `scroll`, `key`, `wait`) or an `answer` for read-only review/analysis demos. SafeScreen logs `answer` output locally after sanitizing any accidental literal vault values.
 
 ## Setup
 
@@ -89,11 +93,17 @@ For a raw vLLM/OpenAI-compatible Qwen VL server, use:
 ```bash
 SAFE_SCREEN_REDACTOR_MODE=brev
 BREV_REDACTOR_API=vllm-chat
-BREV_REDACTOR_URL=http://localhost:12434/v1
+BREV_REDACTOR_URL=http://localhost:12434
 BREV_REDACTOR_MODEL=Qwen/Qwen3-VL-4B-Instruct
 ```
 
 SafeScreen will call `/v1/chat/completions` and parse the model's JSON response into redaction boxes.
+
+When running the model on Brev, port-forward the vLLM server to your machine, then point `BREV_REDACTOR_URL` at the forwarded local port:
+
+```bash
+brev port-forward safe-screen -p 12434:12434
+```
 
 ## Brev Redactor Contract
 
@@ -167,9 +177,15 @@ Choose a built-in scenario:
 SAFE_SCREEN_DEMO_SCENARIO=multistep
 SAFE_SCREEN_DEMO_SCENARIO=statement
 SAFE_SCREEN_DEMO_SCENARIO=profile
+SAFE_SCREEN_DEMO_SCENARIO=health
 ```
 
-`multistep` is the interactive form-filling demo. `statement` is a read-only account statement with account numbers, routing number, SSN, card, address, and transaction references. `profile` is a customer profile page with credentials, support notes, SSN, phone, and card values.
+Built-in demos:
+
+- `multistep`: interactive browser task that fills a multi-step form using placeholders, then submits after approval
+- `statement`: read-only account statement where CUA produces a privacy-safe spend analysis from the redacted screenshot
+- `profile`: read-only customer profile review that describes the page and checks whether sensitive fields are placeholder-covered
+- `health`: HIPAA-style patient-record review that checks PHI redaction status without revealing values
 
 Each scenario has a default CUA prompt. Override it with:
 
@@ -178,6 +194,8 @@ SAFE_SCREEN_GOAL=Your custom prompt with placeholders like [MY_EMAIL].
 ```
 
 In the web dashboard, changing the scenario fills the Goal box with that scenario's prompt; edit the box before pressing Start to test prompt variations.
+
+For read-only prompts such as `statement`, `profile`, and `health`, SafeScreen routes the request as an answer-style CUA call instead of asking the model to operate the browser.
 
 By default, the built-in demo form starts empty so the CUA flow can fill it. Set this to show the original prefilled redaction-proof page:
 
@@ -209,6 +227,7 @@ SAFE_SCREEN_DEMO_PROGRESS_OVERRIDE=false
 - Console logs show only the redacted screenshot is sent to Lightcone/Northstar.
 - Mock mode works without Tzafon credentials.
 - Placeholder text is swapped locally before browser typing.
+- Read-only demos produce a `CUA answer` log without browser interaction.
 - Submit click requires console approval.
 
 ## Files
@@ -216,6 +235,9 @@ SAFE_SCREEN_DEMO_PROGRESS_OVERRIDE=false
 - `src/index.ts` orchestrates the demo loop.
 - `src/kernelClient.ts` manages Kernel or local Playwright browser control.
 - `src/redactor.ts` detects sensitive DOM text and draws sticky-note overlays.
-- `src/tzafonClient.ts` calls Lightcone/Northstar or mock actions.
+- `src/tzafonClient.ts` calls Lightcone/Northstar and normalizes browser actions or answer output.
 - `src/actionGuard.ts` validates and localizes model actions.
-- `src/demoPage.ts` defines the local demo form and placeholder vault.
+- `src/demoScenarios.ts` defines the scenario-specific default prompts.
+- `src/demoPage.ts` defines the local demo pages.
+- `src/vault.ts` resolves local-only placeholder values.
+- `src/web.ts` runs the local dashboard.
